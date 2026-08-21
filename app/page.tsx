@@ -80,8 +80,7 @@ export default function Home() {
   const submitQuestion = (event: FormEvent) => { event.preventDefault(); ask(); };
   const levelLabel = (level: Item["level"]) => level === "danger" ? "위험" : level === "caution" ? "주의" : level === "important" ? "중요" : "일반";
   const levelIcon = (level: Item["level"]) => level === "danger" ? "!" : level === "caution" ? "!" : level === "important" ? "★" : "·";
-  const priorityItems = analysis?.items.filter((item) => item.level !== "general") ?? [];
-  const featuredItems = priorityItems.length ? priorityItems.slice(0, 8) : analysis?.items.slice(0, 8) ?? [];
+  const featuredItems = analysis?.items.filter((item) => item.level === "danger" || item.level === "caution") ?? [];
   const counts = analysis?.items.reduce((result, item) => ({ ...result, [item.level]: result[item.level] + 1 }), { danger: 0, caution: 0, important: 0, general: 0 }) ?? { danger: 0, caution: 0, important: 0, general: 0 };
   return <main>
     <nav className="nav"><a className="brand" href="#top" aria-label="약속 홈"><span className="brandMark">약</span><span>약속</span></a><span className="navNote">AI 금융 계약서 번역</span></nav>
@@ -104,7 +103,7 @@ export default function Home() {
         <div className="sectionHead"><div><span className="miniLabel">실제 분석 결과</span><h2>{analysis.documentType}</h2></div></div>
         <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 구간 확인 완료</b><p>총 <strong>{analysis.items.length}개 항목</strong>을 확인했습니다.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
         <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
-        <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>돈이나 권리에 큰 영향을 줄 수 있는 내용을 먼저 보여드려요.</p></div></div>
+        <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 조항 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
           <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div>}</div>
