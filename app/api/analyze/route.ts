@@ -1,4 +1,4 @@
-import { CONTRACT_ANALYSIS_PROMPT } from "../../ai-prompts";
+import { CONTRACT_ANALYSIS_PROMPT, CONTRACT_COVERAGE_PROMPT } from "../../ai-prompts";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -7,11 +7,11 @@ const analysisSchema = {
   required: ["documentType", "summary", "items", "glossary"],
   properties: {
     documentType: { type: "string" }, summary: { type: "string" },
-    items: { type: "array", minItems: 1, maxItems: 8, items: {
+    items: { type: "array", minItems: 1, maxItems: 80, items: {
       type: "object", additionalProperties: false,
       required: ["level", "title", "explanation", "action", "original", "page"],
       properties: {
-        level: { type: "string", enum: ["danger", "caution", "info"] }, title: { type: "string" },
+        level: { type: "string", enum: ["danger", "caution", "important", "general"] }, title: { type: "string" },
         explanation: { type: "string" }, action: { type: "string" }, original: { type: "string" },
         page: { type: ["integer", "null"] },
       },
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "gpt-5.4", store: false,
-      instructions: CONTRACT_ANALYSIS_PROMPT,
+      instructions: `${CONTRACT_ANALYSIS_PROMPT}\n\n${CONTRACT_COVERAGE_PROMPT}`,
       input: [{ role: "user", content: [
         { type: "input_text", text: "이 금융 계약서를 분석해 핵심 요약과 중요한 조항을 알려주세요." },
         { type: "input_file", filename: uploaded.name, file_data: fileData, detail: "auto" },
