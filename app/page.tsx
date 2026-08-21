@@ -1,17 +1,18 @@
 "use client";
 import { FormEvent, useRef, useState } from "react";
+import { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis, type RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
+type Item = { id: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[] };
-type PdfChunk = { file: File; startPage: number; endPage: number };
+type ClauseExplanation = { clauseId: string; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
-const PAGES_PER_CHUNK = 10;
-const CHUNK_CONCURRENCY = 2;
+const CLAUSES_PER_BATCH = 8;
+const BATCH_CONCURRENCY = 2;
 
 async function readApiJson<T>(response: Response): Promise<T & { error?: string }> {
   const contentType = response.headers.get("content-type") ?? "";
@@ -21,27 +22,12 @@ async function readApiJson<T>(response: Response): Promise<T & { error?: string 
   catch { throw new Error("분석 결과를 읽지 못했어요. 잠시 후 다시 시도해 주세요."); }
 }
 
-async function makePdfChunks(file: File): Promise<PdfChunk[]> {
-  const { PDFDocument } = await import("pdf-lib");
-  const source = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
-  const chunks: PdfChunk[] = [];
-  for (let start = 0; start < source.getPageCount(); start += PAGES_PER_CHUNK) {
-    const end = Math.min(start + PAGES_PER_CHUNK, source.getPageCount());
-    const part = await PDFDocument.create();
-    const pages = await part.copyPages(source, Array.from({ length: end - start }, (_, index) => start + index));
-    pages.forEach((page) => part.addPage(page));
-    const bytes = await part.save({ useObjectStreams: false });
-    chunks.push({ file: new File([new Uint8Array(bytes)], `${file.name}-${start + 1}-${end}.pdf`, { type: "application/pdf" }), startPage: start + 1, endPage: end });
-  }
-  return chunks;
-}
-
-async function analyzePdfChunk(chunk: PdfChunk): Promise<Analysis> {
+async function explainClauseBatch(clauses: RawClause[]) {
   const request = async () => {
-    const body = new FormData(); body.append("file", chunk.file); body.append("startPage", String(chunk.startPage)); body.append("endPage", String(chunk.endPage));
-    const response = await fetch("/api/analyze", { method: "POST", body });
-    const data = await readApiJson<Analysis>(response);
-    if (!response.ok) throw new Error(data.error || "계약서 일부를 분석하지 못했어요.");
+    const input = clauses.map(({ id, page, marker, text }) => ({ id, page, marker, text }));
+    const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clauses: input }) });
+    const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }>(response);
+    if (!response.ok) throw new Error(data.error || "계약서 조항을 설명하지 못했어요.");
     return data;
   };
   try { return await request(); } catch { return request(); }
@@ -88,12 +74,26 @@ export default function Home() {
     if (selected.size > 10 * 1024 * 1024) { setError("파일은 10MB 이하로 올려 주세요."); setStatus("error"); return; }
     setFile(selected); setError(""); setAnalysis(null); setMessages([]); setStatus("analyzing");
     try {
-      const chunks = await makePdfChunks(selected);
-      const results: Analysis[] = [];
-      for (let index = 0; index < chunks.length; index += CHUNK_CONCURRENCY) results.push(...await Promise.all(chunks.slice(index, index + CHUNK_CONCURRENCY).map(analyzePdfChunk)));
-      const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ results }) });
-      const data = await readApiJson<Analysis>(response);
-      if (!response.ok) throw new Error(data.error || "분석 결과를 정리하지 못했어요.");
+      const parsed = await parseContract(selected);
+      const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
+      const cached = await getCachedAnalysis<Analysis>(cacheKey);
+      if (cached) { setAnalysis(cached); setStatus("done"); window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100); return; }
+      const batches = Array.from({ length: Math.ceil(parsed.clauses.length / CLAUSES_PER_BATCH) }, (_, index) => parsed.clauses.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
+      const explained: Array<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }> = [];
+      for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) explained.push(...await Promise.all(batches.slice(index, index + BATCH_CONCURRENCY).map(explainClauseBatch)));
+      const explanationMap = new Map(explained.flatMap((batch) => batch.explanations).map((entry) => [entry.clauseId, entry]));
+      const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
+      const items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
+        const explanation = explanationMap.get(clause.id);
+        if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
+        return { id: clause.id, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item;
+      });
+      const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+      const overview = await readApiJson<{ documentType: string; summary: string }>(response);
+      if (!response.ok) throw new Error(overview.error || "분석 결과를 정리하지 못했어요.");
+      const glossary = [...new Map(explained.flatMap((batch) => batch.glossary).map((entry) => [entry.term, entry])).values()];
+      const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary };
+      await setCachedAnalysis(cacheKey, data);
       setAnalysis(data); setStatus("done");
       window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "문서를 분석하지 못했습니다."); setStatus("error"); }

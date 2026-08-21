@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gpt-5.4", store: false,
+      model: "gpt-5.4-2026-03-05", store: false,
       instructions: CONTRACT_QA_PROMPT,
       input: [{ role: "user", content: [
         { type: "input_text", text: `이전 대화:\n${conversation || "없음"}\n\n현재 질문: ${question}` },
