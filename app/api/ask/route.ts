@@ -4,7 +4,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const answerSchema = {
   type: "object", additionalProperties: false,
-  required: ["answer", "citations", "notFound"],
+  required: ["answer", "citations", "notFound", "glossary"],
   properties: {
     answer: { type: "string" },
     notFound: { type: "boolean" },
@@ -12,6 +12,11 @@ const answerSchema = {
       type: "object", additionalProperties: false,
       required: ["original", "page", "relevance"],
       properties: { original: { type: "string" }, page: { type: ["integer", "null"] }, relevance: { type: "string" } },
+    } },
+    glossary: { type: "array", maxItems: 10, items: {
+      type: "object", additionalProperties: false,
+      required: ["term", "definition"],
+      properties: { term: { type: "string" }, definition: { type: "string" } },
     } },
   },
 } as const;

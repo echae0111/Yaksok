@@ -4,7 +4,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const analysisSchema = {
   type: "object", additionalProperties: false,
-  required: ["documentType", "summary", "items"],
+  required: ["documentType", "summary", "items", "glossary"],
   properties: {
     documentType: { type: "string" }, summary: { type: "string" },
     items: { type: "array", minItems: 1, maxItems: 8, items: {
@@ -15,6 +15,11 @@ const analysisSchema = {
         explanation: { type: "string" }, action: { type: "string" }, original: { type: "string" },
         page: { type: ["integer", "null"] },
       },
+    } },
+    glossary: { type: "array", maxItems: 16, items: {
+      type: "object", additionalProperties: false,
+      required: ["term", "definition"],
+      properties: { term: { type: "string" }, definition: { type: "string" } },
     } },
   },
 } as const;

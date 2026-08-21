@@ -2,12 +2,29 @@
 import { FormEvent, useRef, useState } from "react";
 
 type Status = "idle" | "analyzing" | "done" | "error";
+type GlossaryTerm = { term: string; definition: string };
 type Item = { level: "danger" | "caution" | "info"; title: string; explanation: string; action: string; original: string; page: number | null };
-type Analysis = { documentType: string; summary: string; items: Item[] };
+type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[] };
 type Citation = { original: string; page: number | null; relevance: string };
-type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean };
+type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
+
+function TermHelp({ term, definition }: GlossaryTerm) {
+  const [open, setOpen] = useState(false);
+  return <span className={`termHelp ${open ? "open" : ""}`} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <button type="button" className="termWord" aria-expanded={open} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onClick={() => setOpen((value) => !value)}>{term}</button>
+    <span className="termDefinition" role="tooltip"><b>{term}</b><span>{definition}</span></span>
+  </span>;
+}
+
+function FinancialText({ text, glossary = [] }: { text: string; glossary?: GlossaryTerm[] }) {
+  const definitions = new Map(glossary.filter(({ term, definition }) => term.trim() && definition.trim()).map((entry) => [entry.term.trim(), entry.definition.trim()]));
+  const terms = [...definitions.keys()].sort((a, b) => b.length - a.length);
+  if (!terms.length) return <>{text}</>;
+  const pattern = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
+  return <>{text.split(pattern).map((part, index) => definitions.has(part) ? <TermHelp key={`${part}-${index}`} term={part} definition={definitions.get(part)!} /> : <span key={index}>{part}</span>)}</>;
+}
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,9 +64,9 @@ export default function Home() {
     body.append("history", JSON.stringify(previous.map((message) => ({ role: message.role, text: message.text }))));
     try {
       const response = await fetch("/api/ask", { method: "POST", body });
-      const data = await response.json() as { answer?: string; citations?: Citation[]; notFound?: boolean; error?: string };
+      const data = await response.json() as { answer?: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[]; error?: string };
       if (!response.ok || !data.answer) throw new Error(data.error || "답변을 만들지 못했습니다.");
-      setMessages((current) => [...current, { role: "assistant", text: data.answer!, citations: data.citations, notFound: data.notFound }]);
+      setMessages((current) => [...current, { role: "assistant", text: data.answer!, citations: data.citations, notFound: data.notFound, glossary: data.glossary }]);
     } catch (reason) { setChatError(reason instanceof Error ? reason.message : "답변을 만들지 못했습니다."); }
     finally { setAsking(false); window.setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); }
   };
@@ -74,10 +91,10 @@ export default function Home() {
     {analysis && <>
       <section className="resultSection" id="results" aria-live="polite">
         <div className="sectionHead"><div><span className="miniLabel">실제 분석 결과</span><h2>{analysis.documentType}</h2></div><div className="legend"><span><i className="dot red" />위험</span><span><i className="dot yellow" />주의</span><span><i className="dot green" />참고</span></div></div>
-        <div className="summaryBox"><span>한눈에 보기</span><p>{analysis.summary}</p></div>
+        <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
         <div className="resultList">{analysis.items.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{item.level === "danger" ? "!" : item.level === "caution" ? "i" : "✓"}</span>{item.level === "danger" ? "위험" : item.level === "caution" ? "주의" : "참고"}</div></div>
-          <div className="easyCol"><h3>{item.title}</h3><p>{item.explanation}</p><div className="action"><b>이렇게 하세요</b><span>{item.action}</span></div></div>
+          <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><p><FinancialText text={item.explanation} glossary={analysis.glossary} /></p><div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div></div>
           <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p>{item.original}</p></blockquote>
         </article>)}</div>
       </section>
@@ -90,7 +107,7 @@ export default function Home() {
         <div className="chatWindow">
           {!messages.length && <div className="chatWelcome"><span>✦</span><div><b>아직 대화가 없어요</b><p>위에 질문을 적거나 예시 질문을 눌러보세요. 답은 계약서에 적힌 내용만 보고 알려드려요.</p></div></div>}
           {messages.map((message, index) => <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-            <div className="bubble">{message.role === "assistant" && <b>{message.notFound ? "문서에서 확인되지 않음" : "문서 기반 답변"}</b>}<p>{message.text}</p></div>
+            <div className="bubble">{message.role === "assistant" && <b>{message.notFound ? "문서에서 확인되지 않음" : "문서 기반 답변"}</b>}<p>{message.role === "assistant" ? <FinancialText text={message.text} glossary={message.glossary} /> : message.text}</p></div>
             {message.citations?.map((citation, citationIndex) => <blockquote key={citationIndex}><span>근거 원문{citation.page ? ` · ${citation.page}쪽` : ""}</span><p>“{citation.original}”</p><small>{citation.relevance}</small></blockquote>)}
           </div>)}
           {asking && <div className="message assistant"><div className="bubble typing"><i /><i /><i /></div></div>}
