@@ -1,0 +1,64 @@
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+const analysisSchema = {
+  type: "object", additionalProperties: false,
+  required: ["documentType", "summary", "items"],
+  properties: {
+    documentType: { type: "string" }, summary: { type: "string" },
+    items: { type: "array", minItems: 1, maxItems: 8, items: {
+      type: "object", additionalProperties: false,
+      required: ["level", "title", "explanation", "action", "original", "page"],
+      properties: {
+        level: { type: "string", enum: ["danger", "caution", "info"] }, title: { type: "string" },
+        explanation: { type: "string" }, action: { type: "string" }, original: { type: "string" },
+        page: { type: ["integer", "null"] },
+      },
+    } },
+  },
+} as const;
+
+function jsonError(message: string, status: number) { return Response.json({ error: message }, { status }); }
+
+export async function POST(request: Request) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return jsonError("AI 분석 서비스 설정이 아직 완료되지 않았습니다.", 503);
+  const formData = await request.formData();
+  const uploaded = formData.get("file");
+  if (!(uploaded instanceof File)) return jsonError("PDF 파일을 선택해 주세요.", 400);
+  if (uploaded.type !== "application/pdf" && !uploaded.name.toLowerCase().endsWith(".pdf")) return jsonError("PDF 파일만 분석할 수 있습니다.", 415);
+  if (uploaded.size === 0) return jsonError("빈 파일은 분석할 수 없습니다.", 400);
+  if (uploaded.size > MAX_FILE_SIZE) return jsonError("파일은 10MB 이하로 올려 주세요.", 413);
+
+  const bytes = new Uint8Array(await uploaded.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const fileData = `data:application/pdf;base64,${btoa(binary)}`;
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "gpt-5.4", store: false,
+      instructions: [
+        "당신은 한국 금융 계약서 해설 도우미입니다.", "첨부 PDF에 실제로 적힌 내용만 근거로 분석하세요.",
+        "소비자에게 불리하거나 금전 손실, 자동연장, 해지 제한, 연체, 면책, 수수료, 기한이익 상실과 관련된 조항을 우선하세요.",
+        "법률 자문처럼 단정하지 말고 쉬운 한국어로 설명하세요.",
+        "original에는 근거 원문을 짧게 그대로 인용하고, 확인 가능한 경우에만 page를 기재하세요.",
+      ].join("\n"),
+      input: [{ role: "user", content: [
+        { type: "input_text", text: "이 금융 계약서를 분석해 핵심 요약과 중요한 조항을 알려주세요." },
+        { type: "input_file", filename: uploaded.name, file_data: fileData, detail: "auto" },
+      ] }],
+      text: { format: { type: "json_schema", name: "financial_contract_analysis", strict: true, schema: analysisSchema } },
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text(); console.error("OpenAI response error", response.status, detail.slice(0, 500));
+    if (response.status === 401) return jsonError("AI 서비스 인증 설정을 확인해 주세요.", 503);
+    if (response.status === 429) return jsonError("분석 요청이 많습니다. 잠시 후 다시 시도해 주세요.", 429);
+    return jsonError("문서를 분석하지 못했습니다. 잠시 후 다시 시도해 주세요.", 502);
+  }
+  const payload = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+  const outputText = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((content) => content.type === "output_text")?.text;
+  if (!outputText) return jsonError("분석 결과를 읽지 못했습니다.", 502);
+  try { return Response.json(JSON.parse(outputText)); } catch { return jsonError("분석 결과 형식이 올바르지 않습니다.", 502); }
+}
