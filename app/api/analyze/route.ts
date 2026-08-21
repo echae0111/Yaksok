@@ -2,7 +2,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const analysisSchema = {
   type: "object", additionalProperties: false,
-  required: ["documentType", "summary", "items"],
+  required: ["documentType", "summary", "items", "deadlines"],
   properties: {
     documentType: { type: "string" }, summary: { type: "string" },
     items: { type: "array", minItems: 1, maxItems: 8, items: {
@@ -12,6 +12,16 @@ const analysisSchema = {
         level: { type: "string", enum: ["danger", "caution", "info"] }, title: { type: "string" },
         explanation: { type: "string" }, action: { type: "string" }, original: { type: "string" },
         page: { type: ["integer", "null"] },
+      },
+    } },
+    deadlines: { type: "array", maxItems: 12, items: {
+      type: "object", additionalProperties: false,
+      required: ["title", "date", "condition", "action", "original", "page"],
+      properties: {
+        title: { type: "string" },
+        date: { type: ["string", "null"], description: "문서에 확정된 날짜가 있으면 YYYY-MM-DD, 없으면 null" },
+        condition: { type: "string", description: "계약일로부터 15일 이내 같은 상대적 기한 또는 적용 조건" },
+        action: { type: "string" }, original: { type: "string" }, page: { type: ["integer", "null"] },
       },
     } },
   },
@@ -43,6 +53,7 @@ export async function POST(request: Request) {
         "소비자에게 불리하거나 금전 손실, 자동연장, 해지 제한, 연체, 면책, 수수료, 기한이익 상실과 관련된 조항을 우선하세요.",
         "법률 자문처럼 단정하지 말고 쉬운 한국어로 설명하세요.",
         "original에는 근거 원문을 짧게 그대로 인용하고, 확인 가능한 경우에만 page를 기재하세요.",
+        "deadlines에는 청약철회, 납입, 자동연장 거절, 수수료 종료, 만료, 갱신 및 해지처럼 사용자가 지켜야 할 날짜나 상대적 기한만 추출하세요.",
       ].join("\n"),
       input: [{ role: "user", content: [
         { type: "input_text", text: "이 금융 계약서를 분석해 핵심 요약과 중요한 조항을 알려주세요." },
