@@ -9,10 +9,11 @@ const analysisSchema = {
     documentType: { type: "string" }, summary: { type: "string" },
     items: { type: "array", minItems: 1, maxItems: 80, items: {
       type: "object", additionalProperties: false,
-      required: ["level", "title", "explanation", "action", "original", "page"],
+      required: ["level", "title", "core", "easyExplanation", "impact", "checkPoint", "action", "original", "page"],
       properties: {
         level: { type: "string", enum: ["danger", "caution", "important", "general"] }, title: { type: "string" },
-        explanation: { type: "string" }, action: { type: "string" }, original: { type: "string" },
+        core: { type: "string" }, easyExplanation: { type: "string" }, impact: { type: "string" },
+        checkPoint: { type: "string" }, action: { type: "string" }, original: { type: "string" },
         page: { type: ["integer", "null"] },
       },
     } },

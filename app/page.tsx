@@ -3,7 +3,7 @@ import { FormEvent, useRef, useState } from "react";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { level: "danger" | "caution" | "important" | "general"; title: string; explanation: string; action: string; original: string; page: number | null };
+type Item = { level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[] };
 type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
@@ -24,6 +24,11 @@ function FinancialText({ text, glossary = [] }: { text: string; glossary?: Gloss
   if (!terms.length) return <>{text}</>;
   const pattern = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
   return <>{text.split(pattern).map((part, index) => definitions.has(part) ? <TermHelp key={`${part}-${index}`} term={part} definition={definitions.get(part)!} /> : <span key={index}>{part}</span>)}</>;
+}
+
+function ExplanationSections({ item, glossary }: { item: Item; glossary: GlossaryTerm[] }) {
+  const sections = [["핵심 내용", item.core], ["쉽게 설명하면", item.easyExplanation], ["나에게 어떤 영향이 있나요?", item.impact], ["확인할 점", item.checkPoint]].filter(([, value]) => value.trim());
+  return <div className="explanationSections">{sections.map(([label, value]) => <div className="explanationRow" key={label}><b>{label}</b><p><FinancialText text={value} glossary={glossary} /></p></div>)}</div>;
 }
 
 export default function Home() {
@@ -102,11 +107,11 @@ export default function Home() {
         <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>돈이나 권리에 큰 영향을 줄 수 있는 내용을 먼저 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
-          <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><p><FinancialText text={item.explanation} glossary={analysis.glossary} /></p>{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div>}</div>
+          <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div>}</div>
           <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p>{item.original}</p></blockquote>
         </article>)}</div>
         <button className="allClausesButton" type="button" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>{showAll ? "전체 조항 접기" : `전체 ${analysis.items.length}개 조항 보기`}<span>{showAll ? "↑" : "↓"}</span></button>
-        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} /></b><i>＋</i></summary><div className="clauseBody"><p><FinancialText text={item.explanation} glossary={analysis.glossary} /></p><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “{item.original}”</small></div></details>)}</div>}
+        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “{item.original}”</small></div></details>)}</div>}
       </section>
 
       <section className="chatSection">
