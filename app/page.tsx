@@ -102,7 +102,7 @@ export default function Home() {
     {analysis && <>
       <section className="resultSection" id="results" aria-live="polite">
         <div className="sectionHead"><div><span className="miniLabel">실제 분석 결과</span><h2>{analysis.documentType}</h2></div></div>
-        <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 확인 완료</b><p>계약 조건으로 볼 수 있는 총 <strong>{analysis.items.length}개 항목</strong>을 확인하고 중요도별로 나눴어요.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
+        <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 구간 확인 완료</b><p>총 <strong>{analysis.items.length}개 항목</strong>을 확인했습니다.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
         <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
         <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>돈이나 권리에 큰 영향을 줄 수 있는 내용을 먼저 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
