@@ -5,10 +5,47 @@ type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
 type Item = { level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[] };
+type PdfChunk = { file: File; startPage: number; endPage: number };
 type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
+const PAGES_PER_CHUNK = 10;
+const CHUNK_CONCURRENCY = 2;
+
+async function readApiJson<T>(response: Response): Promise<T & { error?: string }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const text = await response.text();
+  if (!contentType.includes("application/json")) throw new Error("분석 연결이 중간에 끊겼어요. 잠시 후 다시 시도해 주세요.");
+  try { return JSON.parse(text) as T & { error?: string }; }
+  catch { throw new Error("분석 결과를 읽지 못했어요. 잠시 후 다시 시도해 주세요."); }
+}
+
+async function makePdfChunks(file: File): Promise<PdfChunk[]> {
+  const { PDFDocument } = await import("pdf-lib");
+  const source = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  const chunks: PdfChunk[] = [];
+  for (let start = 0; start < source.getPageCount(); start += PAGES_PER_CHUNK) {
+    const end = Math.min(start + PAGES_PER_CHUNK, source.getPageCount());
+    const part = await PDFDocument.create();
+    const pages = await part.copyPages(source, Array.from({ length: end - start }, (_, index) => start + index));
+    pages.forEach((page) => part.addPage(page));
+    const bytes = await part.save({ useObjectStreams: false });
+    chunks.push({ file: new File([new Uint8Array(bytes)], `${file.name}-${start + 1}-${end}.pdf`, { type: "application/pdf" }), startPage: start + 1, endPage: end });
+  }
+  return chunks;
+}
+
+async function analyzePdfChunk(chunk: PdfChunk): Promise<Analysis> {
+  const request = async () => {
+    const body = new FormData(); body.append("file", chunk.file); body.append("startPage", String(chunk.startPage)); body.append("endPage", String(chunk.endPage));
+    const response = await fetch("/api/analyze", { method: "POST", body });
+    const data = await readApiJson<Analysis>(response);
+    if (!response.ok) throw new Error(data.error || "계약서 일부를 분석하지 못했어요.");
+    return data;
+  };
+  try { return await request(); } catch { return request(); }
+}
 
 function TermHelp({ term, definition }: GlossaryTerm) {
   const [open, setOpen] = useState(false);
@@ -50,11 +87,13 @@ export default function Home() {
     if (selected.type !== "application/pdf" && !selected.name.toLowerCase().endsWith(".pdf")) { setError("PDF 파일만 분석할 수 있어요."); setStatus("error"); return; }
     if (selected.size > 10 * 1024 * 1024) { setError("파일은 10MB 이하로 올려 주세요."); setStatus("error"); return; }
     setFile(selected); setError(""); setAnalysis(null); setMessages([]); setStatus("analyzing");
-    const body = new FormData(); body.append("file", selected);
     try {
-      const response = await fetch("/api/analyze", { method: "POST", body });
-      const data = await response.json() as Analysis & { error?: string };
-      if (!response.ok) throw new Error(data.error || "문서를 분석하지 못했습니다.");
+      const chunks = await makePdfChunks(selected);
+      const results: Analysis[] = [];
+      for (let index = 0; index < chunks.length; index += CHUNK_CONCURRENCY) results.push(...await Promise.all(chunks.slice(index, index + CHUNK_CONCURRENCY).map(analyzePdfChunk)));
+      const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ results }) });
+      const data = await readApiJson<Analysis>(response);
+      if (!response.ok) throw new Error(data.error || "분석 결과를 정리하지 못했어요.");
       setAnalysis(data); setStatus("done");
       window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "문서를 분석하지 못했습니다."); setStatus("error"); }
@@ -70,7 +109,7 @@ export default function Home() {
     body.append("history", JSON.stringify(previous.map((message) => ({ role: message.role, text: message.text }))));
     try {
       const response = await fetch("/api/ask", { method: "POST", body });
-      const data = await response.json() as { answer?: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[]; error?: string };
+      const data = await readApiJson<{ answer?: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] }>(response);
       if (!response.ok || !data.answer) throw new Error(data.error || "답변을 만들지 못했습니다.");
       setMessages((current) => [...current, { role: "assistant", text: data.answer!, citations: data.citations, notFound: data.notFound, glossary: data.glossary }]);
     } catch (reason) { setChatError(reason instanceof Error ? reason.message : "답변을 만들지 못했습니다."); }
