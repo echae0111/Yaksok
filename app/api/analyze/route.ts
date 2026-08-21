@@ -1,3 +1,5 @@
+import { CONTRACT_ANALYSIS_PROMPT } from "../../ai-prompts";
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const analysisSchema = {
@@ -38,12 +40,7 @@ export async function POST(request: Request) {
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "gpt-5.4", store: false,
-      instructions: [
-        "당신은 한국 금융 계약서 해설 도우미입니다.", "첨부 PDF에 실제로 적힌 내용만 근거로 분석하세요.",
-        "소비자에게 불리하거나 금전 손실, 자동연장, 해지 제한, 연체, 면책, 수수료, 기한이익 상실과 관련된 조항을 우선하세요.",
-        "법률 자문처럼 단정하지 말고 쉬운 한국어로 설명하세요.",
-        "original에는 근거 원문을 짧게 그대로 인용하고, 확인 가능한 경우에만 page를 기재하세요.",
-      ].join("\n"),
+      instructions: CONTRACT_ANALYSIS_PROMPT,
       input: [{ role: "user", content: [
         { type: "input_text", text: "이 금융 계약서를 분석해 핵심 요약과 중요한 조항을 알려주세요." },
         { type: "input_file", filename: uploaded.name, file_data: fileData, detail: "auto" },

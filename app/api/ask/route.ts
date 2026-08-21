@@ -1,3 +1,5 @@
+import { CONTRACT_QA_PROMPT } from "../../ai-prompts";
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const answerSchema = {
@@ -40,13 +42,7 @@ export async function POST(request: Request) {
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "gpt-5.4", store: false,
-      instructions: [
-        "당신은 한국 금융 계약서 문답 도우미입니다.",
-        "반드시 첨부 PDF에 실제로 적힌 내용만 근거로 답하세요. 일반 지식으로 빈칸을 채우거나 법률 자문처럼 단정하지 마세요.",
-        "답을 찾을 수 없으면 notFound를 true로 하고 문서에서 확인되지 않는다고 명확히 말하세요.",
-        "모든 실질적 답변에는 근거 원문을 짧게 인용하고, 확인 가능한 경우에만 페이지를 표시하세요.",
-        "이전 대화는 질문의 문맥 파악에만 사용하고 근거는 항상 PDF에서 다시 찾으세요.",
-      ].join("\n"),
+      instructions: CONTRACT_QA_PROMPT,
       input: [{ role: "user", content: [
         { type: "input_text", text: `이전 대화:\n${conversation || "없음"}\n\n현재 질문: ${question}` },
         { type: "input_file", filename: uploaded.name, file_data: fileData, detail: "auto" },
