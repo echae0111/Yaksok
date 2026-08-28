@@ -11,10 +11,14 @@ type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
-const CLAUSES_PER_BATCH = 5;
-const BATCH_CONCURRENCY = 2;
+const CLAUSES_PER_BATCH = 8;
+const BATCH_CONCURRENCY = 1;
 type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
 type AnalysisProgress = { phase: string; completed: number; total: number; percent: number };
+class RateLimitError extends Error {
+  constructor(message: string, public retryAfterSeconds: number, public quotaExhausted: boolean) { super(message); }
+}
+const sleep = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 function formatElapsed(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -33,21 +37,41 @@ async function readApiJson<T>(response: Response): Promise<T & { error?: string 
 async function requestClauseBatch(clauses: RawClause[]) {
   const input = clauses.map(({ id, page, marker, text }) => ({ id, page, marker, text }));
   const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clauses: input }) });
-  const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }>(response);
+  const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[]; errorCode?: string; retryAfterSeconds?: number }>(response);
+  if (response.status === 429) throw new RateLimitError(data.error || "분석 요청이 잠시 제한됐습니다.", data.retryAfterSeconds ?? 0, data.errorCode === "quota_exhausted");
   if (!response.ok) throw new Error(data.error || "계약서 조항을 설명하지 못했어요.");
   if (data.explanations.length !== clauses.length) throw new Error("일부 조항 설명이 누락됐어요.");
   return data;
 }
 
-async function explainClauseBatch(clauses: RawClause[]) {
-  try { return await requestClauseBatch(clauses); }
-  catch {
+async function requestWithRateLimitRetry(clauses: RawClause[], onPause: (seconds: number) => void) {
+  const fallbackDelays = [10, 30, 60];
+  for (let attempt = 0; ; attempt++) {
     try { return await requestClauseBatch(clauses); }
-    catch {
-      const individual = await Promise.all(clauses.map(async (clause) => {
-        try { return await requestClauseBatch([clause]); }
-        catch { return requestClauseBatch([clause]); }
-      }));
+    catch (reason) {
+      if (!(reason instanceof RateLimitError) || reason.quotaExhausted || attempt >= fallbackDelays.length) throw reason;
+      const seconds = Math.max(reason.retryAfterSeconds, fallbackDelays[attempt]);
+      onPause(seconds);
+      await sleep(seconds * 1000);
+    }
+  }
+}
+
+async function explainClauseBatch(clauses: RawClause[], onPause: (seconds: number) => void) {
+  try { return await requestWithRateLimitRetry(clauses, onPause); }
+  catch (reason) {
+    if (reason instanceof RateLimitError) throw reason;
+    try { return await requestWithRateLimitRetry(clauses, onPause); }
+    catch (reason) {
+      if (reason instanceof RateLimitError) throw reason;
+      const individual: Array<Awaited<ReturnType<typeof requestClauseBatch>>> = [];
+      for (const clause of clauses) {
+        try { individual.push(await requestWithRateLimitRetry([clause], onPause)); }
+        catch (reason) {
+          if (reason instanceof RateLimitError) throw reason;
+          individual.push(await requestWithRateLimitRetry([clause], onPause));
+        }
+      }
       return {
         explanations: individual.flatMap((result) => result.explanations),
         glossary: individual.flatMap((result) => result.glossary),
@@ -119,7 +143,7 @@ export default function Home() {
       const batches = Array.from({ length: Math.ceil(pending.length / CLAUSES_PER_BATCH) }, (_, index) => pending.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
       for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) {
         const group = batches.slice(index, index + BATCH_CONCURRENCY);
-        const results = await Promise.all(group.map(explainClauseBatch));
+        const results = await Promise.all(group.map((batch) => explainClauseBatch(batch, (seconds) => setProgress((current) => ({ ...current, phase: `요청 제한이 풀릴 때까지 ${seconds}초 기다리는 중이에요` })))));
         for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
           const result = results[resultIndex];
           const batch = group[resultIndex];

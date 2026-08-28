@@ -21,6 +21,13 @@ const explanationSchema = (clauseCount: number) => ({
 
 type InputClause = { id: string; page: number; marker: string; text: string };
 function jsonError(message: string, status: number) { return Response.json({ error: message }, { status }); }
+function parseResetSeconds(value: string | null) {
+  if (!value) return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return Math.max(0, Math.ceil(numeric));
+  const match = value.match(/(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?/);
+  return match ? Number(match[1] ?? 0) * 60 + Math.ceil(Number(match[2] ?? 0)) : 0;
+}
 function getOutputText(payload: { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }) {
   return payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((content) => content.type === "output_text")?.text;
 }
@@ -44,7 +51,24 @@ export async function POST(request: Request) {
     });
     if (!response.ok) {
       const detail = await response.text(); console.error("OpenAI clause explanation error", response.status, detail.slice(0, 500));
-      return jsonError(response.status === 429 ? "분석 요청이 많습니다. 잠시 후 다시 시도해 주세요." : "계약서 조항을 설명하지 못했습니다.", response.status === 429 ? 429 : 502);
+      if (response.status === 429) {
+        let errorCode = "rate_limited";
+        try {
+          const parsed = JSON.parse(detail) as { error?: { code?: string; type?: string } };
+          if (parsed.error?.code === "insufficient_quota" || parsed.error?.type === "insufficient_quota") errorCode = "quota_exhausted";
+        } catch { /* 원문은 서버 로그에만 남깁니다. */ }
+        const retryAfterSeconds = Math.max(
+          parseResetSeconds(response.headers.get("retry-after")),
+          parseResetSeconds(response.headers.get("x-ratelimit-reset-requests")),
+          parseResetSeconds(response.headers.get("x-ratelimit-reset-tokens")),
+        );
+        return Response.json({
+          error: errorCode === "quota_exhausted" ? "AI API 사용 한도가 소진됐습니다. 결제 및 사용량 설정을 확인해 주세요." : "분석 요청이 잠시 제한됐습니다. 자동으로 기다린 뒤 다시 이어갈게요.",
+          errorCode,
+          retryAfterSeconds,
+        }, { status: 429, headers: retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : undefined });
+      }
+      return jsonError("계약서 조항을 설명하지 못했습니다.", 502);
     }
     const payload = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
     const text = getOutputText(payload);
