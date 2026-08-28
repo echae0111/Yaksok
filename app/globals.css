@@ -24,10 +24,13 @@ h1 em:after { content:""; position:absolute; height:8px; left:1px; right:1px; bo
 .upload>span { color:#839087; font-size:12px; margin:8px 0 18px; }
 .upload button { border:0; border-radius:10px; padding:12px 22px; background:var(--green); color:white; font-weight:700; cursor:pointer; }
 .trust { display:flex; justify-content:center; gap:26px; color:#7a857e; font-size:12px; margin-top:18px; }
-.loadingBlock { display:flex; flex-direction:column; align-items:center; gap:9px; }
+.loadingBlock { display:flex; flex-direction:column; align-items:center; gap:9px; width:min(100%,560px); }
 .loadingBlock span,.fileDone div span { color:#748077; font-size:13px; }
 .spinner { width:44px; height:44px; border:4px solid #d7e8dd; border-top-color:var(--green); border-radius:50%; animation:spin .8s linear infinite; margin-bottom:8px; }
+.progressPanel{width:100%;margin-top:12px;padding:16px 18px;border:1px solid #d5e5da;border-radius:14px;background:rgba(255,255,255,.82);box-shadow:0 8px 24px rgba(31,107,76,.06)}
+.progressMeta,.progressFoot{display:flex;align-items:center;justify-content:space-between;gap:14px}.progressMeta b{font-size:12px;color:#315f49}.progressMeta time{font-size:12px;color:#6f7c74;font-variant-numeric:tabular-nums}.progressTrack{height:10px;margin:11px 0 9px;border-radius:999px;background:#e2ece5;overflow:hidden}.progressTrack i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#276e50,#5fa37d);transition:width .45s ease;position:relative}.progressTrack i:after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.55) 50%,transparent 75%);animation:progressShine 1.7s linear infinite}.progressFoot>span{color:var(--green);font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}.progressFoot small{color:#87918b;font-size:11px;text-align:right;line-height:1.4}
 @keyframes spin { to{transform:rotate(360deg)} }
+@keyframes progressShine { from{transform:translateX(-100%)}to{transform:translateX(100%)} }
 .fileDone { width:100%; display:flex; align-items:center; justify-content:center; gap:15px; }
 .fileDone .check { width:45px; height:45px; border-radius:50%; background:#dceee3; display:grid; place-items:center; color:var(--green); font-weight:900; }
 .fileDone div { display:flex; flex-direction:column; text-align:left; gap:5px; }
