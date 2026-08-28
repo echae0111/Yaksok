@@ -1,4 +1,5 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
 export const ANALYSIS_VERSION = "parser-1_prompt-7_risk-1_gpt-5.4-2026-03-05";
 
@@ -64,10 +65,9 @@ function pageBlocks(lines: Line[]) {
   return blocks;
 }
 
-export async function parseContract(file: File): Promise<{ documentHash: string; clauses: RawClause[] }> {
+export async function parseContract(file: File, onPageProgress?: (currentPage: number, totalPages: number) => void): Promise<{ documentHash: string; clauses: RawClause[] }> {
   const data = await file.arrayBuffer();
   const documentHash = await sha256(data);
-  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
   const pages: Line[][] = [];
@@ -75,6 +75,7 @@ export async function parseContract(file: File): Promise<{ documentHash: string;
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
     pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, pageNumber));
+    onPageProgress?.(pageNumber, pdf.numPages);
   }
   const textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
   if (textLength < Math.max(80, pdf.numPages * 20)) throw new Error("이 PDF는 스캔 이미지 중심이라 글자를 충분히 읽지 못했어요. 텍스트 검색이 가능한 PDF로 다시 시도해 주세요.");

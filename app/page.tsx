@@ -23,7 +23,11 @@ const sleep = (milliseconds: number) => new Promise((resolve) => window.setTimeo
 function formatElapsed(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  return minutes ? `${minutes}분 ${String(remainder).padStart(2, "0")}초` : `${remainder}초`;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+function formatProgressCount(progress: AnalysisProgress) {
+  if (!progress.total) return "문서 확인 중";
+  return progress.phase.startsWith("PDF ") ? `${progress.completed} / ${progress.total}쪽` : `${progress.completed} / ${progress.total}개 조항`;
 }
 
 async function readApiJson<T>(response: Response): Promise<T & { error?: string }> {
@@ -129,8 +133,8 @@ export default function Home() {
     if (selected.size > 10 * 1024 * 1024) { setError("파일은 10MB 이하로 올려 주세요."); setStatus("error"); return; }
     setFile(selected); setError(""); setAnalysis(null); setMessages([]); setElapsedSeconds(0); setProgress({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 }); setStatus("analyzing");
     try {
-      const parsed = await parseContract(selected);
-      setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 10 });
+      const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }));
+      setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
       const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
       const cached = await getCachedAnalysis<Analysis>(cacheKey);
       if (cached) { setAnalysis(cached); setStatus("done"); window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100); return; }
@@ -139,7 +143,7 @@ export default function Home() {
       const glossaryParts = saved.flatMap((entry) => entry.cached?.glossary ?? []);
       const pending = saved.filter((entry) => !entry.cached).map((entry) => entry.clause);
       let completedCount = explanationMap.size;
-      setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 10 + Math.round((completedCount / parsed.clauses.length) * 80) });
+      setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
       const batches = Array.from({ length: Math.ceil(pending.length / CLAUSES_PER_BATCH) }, (_, index) => pending.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
       for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) {
         const group = batches.slice(index, index + BATCH_CONCURRENCY);
@@ -153,7 +157,7 @@ export default function Home() {
             explanationMap.set(clause.id, explanation);
             await setCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`, { explanation, glossary: result.glossary });
             completedCount += 1;
-            setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 10 + Math.round((completedCount / parsed.clauses.length) * 80) });
+            setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
           }
           glossaryParts.push(...result.glossary);
         }
@@ -207,7 +211,7 @@ export default function Home() {
       <div className={`upload ${status !== "idle" ? "active" : ""}`} onClick={() => status === "idle" && inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); analyze(event.dataTransfer.files[0]); }} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && status === "idle" && inputRef.current?.click()} aria-label="PDF 파일 업로드">
         <input ref={inputRef} type="file" accept="application/pdf,.pdf" hidden onChange={(event) => analyze(event.target.files?.[0])} />
         {status === "idle" && <><div className="uploadIcon">↑</div><strong>계약서 PDF를 여기에 놓으세요</strong><span>또는 클릭해서 파일 선택 · 최대 10MB</span><button type="button">PDF 선택하기</button></>}
-        {status === "analyzing" && <div className="loadingBlock"><div className="spinner" /><strong>{file?.name}</strong><span>{progress.phase}</span><div className="progressPanel" aria-live="polite"><div className="progressMeta"><b>{progress.total ? `${progress.completed} / ${progress.total}개 조항` : "문서 확인 중"}</b><time>{formatElapsed(elapsedSeconds)} 경과</time></div><div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="계약서 분석 진행률"><i style={{ width: `${Math.min(progress.percent, 98)}%` }} /></div><div className="progressFoot"><span>{Math.min(progress.percent, 98)}%</span><small>긴 계약서는 몇 분 정도 걸릴 수 있어요. 창을 닫지 말아 주세요.</small></div></div></div>}
+        {status === "analyzing" && <div className="loadingBlock"><div className="spinner" /><strong>{file?.name}</strong><span>{progress.phase}</span><div className="progressPanel" aria-live="polite"><div className="progressMeta"><b>{formatProgressCount(progress)}</b><time>{formatElapsed(elapsedSeconds)}</time></div><div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="계약서 분석 진행률"><i style={{ width: `${Math.min(progress.percent, 98)}%` }} /></div><div className="progressFoot"><span>{Math.min(progress.percent, 98)}%</span><small>긴 계약서는 몇 분 정도 걸릴 수 있어요. 창을 닫지 말아 주세요.</small></div></div></div>}
         {status === "done" && <div className="fileDone"><span className="check">✓</span><div><strong>{file?.name}</strong><span>문서 분석이 완료되었습니다</span></div><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다른 파일</button></div>}
         {status === "error" && <div className="errorBlock"><span className="errorIcon">!</span><strong>분석하지 못했어요</strong><span>{error}</span><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다시 선택하기</button></div>}
       </div>
