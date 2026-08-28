@@ -127,28 +127,48 @@ function TermHelp({ term, definition }: GlossaryTerm) {
   </span>;
 }
 
-function FinancialText({ text, glossary = [] }: { text: string; glossary?: GlossaryTerm[] }) {
+function FinancialText({ text, glossary = [], highlightOnly, firstOccurrenceOnly = false }: { text: string; glossary?: GlossaryTerm[]; highlightOnly?: Set<string>; firstOccurrenceOnly?: boolean }) {
   const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람"]);
   const definitions = new Map(glossary
     .filter(({ term, definition }) => {
       const normalized = term.trim();
-      return definition.trim() && !everydayTerms.has(normalized) && normalized.length >= 2;
+      return definition.trim() && !everydayTerms.has(normalized) && normalized.length >= 2 && (!highlightOnly || highlightOnly.has(normalized));
     })
     .map((entry) => [entry.term.trim(), entry.definition.trim()]));
   const terms = [...definitions.keys()].sort((a, b) => b.length - a.length);
   if (!terms.length) return <>{text}</>;
   const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
   const parts: ReactNode[] = [];
+  const highlighted = new Set<string>();
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const term = match[0];
     const start = match.index;
     if (start > cursor) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor, start)}</span>);
-    parts.push(<TermHelp key={`term-${start}`} term={term} definition={definitions.get(term)!} />);
+    if (!firstOccurrenceOnly || !highlighted.has(term)) {
+      parts.push(<TermHelp key={`term-${start}`} term={term} definition={definitions.get(term)!} />);
+      highlighted.add(term);
+    } else parts.push(<span key={`text-term-${start}`}>{term}</span>);
     cursor = start + term.length;
   }
   if (cursor < text.length) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor)}</span>);
   return <>{parts}</>;
+}
+
+type ClauseTextField = "core" | "easyExplanation" | "impact" | "checkPoint" | "action";
+function getClauseHighlightPlan(item: Item, glossary: GlossaryTerm[]) {
+  const fields: ClauseTextField[] = ["core", "easyExplanation", "impact", "checkPoint", "action"];
+  const plan: Record<ClauseTextField | "title", Set<string>> = {
+    title: new Set(), core: new Set(), easyExplanation: new Set(), impact: new Set(), checkPoint: new Set(), action: new Set(),
+  };
+  for (const { term } of glossary) {
+    const normalized = term.trim();
+    if (!normalized) continue;
+    const firstBodyField = fields.find((field) => item[field].includes(normalized));
+    if (firstBodyField) plan[firstBodyField].add(normalized);
+    else if (item.title.includes(normalized)) plan.title.add(normalized);
+  }
+  return plan;
 }
 
 function ReadableOriginal({ text }: { text: string }) {
@@ -159,8 +179,9 @@ function ReadableOriginal({ text }: { text: string }) {
 }
 
 function ExplanationSections({ item, glossary }: { item: Item; glossary: GlossaryTerm[] }) {
-  const sections = [["핵심 내용", item.core], ["쉽게 설명하면", item.easyExplanation], ["나에게 어떤 영향이 있나요?", item.impact], ["확인할 점", item.checkPoint]].filter(([, value]) => value.trim());
-  return <div className="explanationSections">{sections.map(([label, value]) => <div className="explanationRow" key={label}><b>{label}</b><p><FinancialText text={value} glossary={glossary} /></p></div>)}</div>;
+  const plan = getClauseHighlightPlan(item, glossary);
+  const sections: Array<[string, string, ClauseTextField]> = [["핵심 내용", item.core, "core"], ["쉽게 설명하면", item.easyExplanation, "easyExplanation"], ["나에게 어떤 영향이 있나요?", item.impact, "impact"], ["확인할 점", item.checkPoint, "checkPoint"]].filter(([, value]) => value.trim());
+  return <div className="explanationSections">{sections.map(([label, value, field]) => <div className="explanationRow" key={label}><b>{label}</b><p><FinancialText text={value} glossary={glossary} highlightOnly={plan[field]} firstOccurrenceOnly /></p></div>)}</div>;
 }
 
 function WaitingQuiz() {
@@ -404,11 +425,11 @@ export default function Home() {
         <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 조항 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
-          <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div>}</div>
+          <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).title} firstOccurrenceOnly /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).action} firstOccurrenceOnly /></span></div>}</div>
           <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p><ReadableOriginal text={item.original} /></p></blockquote>
         </article>)}</div>
         <button className="allClausesButton" type="button" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>{showAll ? "전체 조항 접기" : `전체 ${analysis.items.length}개 조항 보기`}<span>{showAll ? "↑" : "↓"}</span></button>
-        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “<ReadableOriginal text={item.original} />”</small></div></details>)}</div>}
+        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).title} firstOccurrenceOnly /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “<ReadableOriginal text={item.original} />”</small></div></details>)}</div>}
       </section>
 
       <section className="chatSection">
