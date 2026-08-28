@@ -151,6 +151,13 @@ function FinancialText({ text, glossary = [] }: { text: string; glossary?: Gloss
   return <>{parts}</>;
 }
 
+function ReadableOriginal({ text }: { text: string }) {
+  const cleaned = text.replace(/[□■�\u0000]+/g, " ").replace(/\s+/g, " ").trim();
+  const hadBrokenGlyphs = cleaned !== text.replace(/\s+/g, " ").trim();
+  if (!cleaned) return <span className="unreadableOriginal">PDF 글꼴 문제로 이 원문은 글자를 읽을 수 없어요.</span>;
+  return <>{cleaned}{hadBrokenGlyphs && <span className="originalWarning"> · 일부 글자는 PDF에서 읽히지 않아 제외했어요.</span>}</>;
+}
+
 function ExplanationSections({ item, glossary }: { item: Item; glossary: GlossaryTerm[] }) {
   const sections = [["핵심 내용", item.core], ["쉽게 설명하면", item.easyExplanation], ["나에게 어떤 영향이 있나요?", item.impact], ["확인할 점", item.checkPoint]].filter(([, value]) => value.trim());
   return <div className="explanationSections">{sections.map(([label, value]) => <div className="explanationRow" key={label}><b>{label}</b><p><FinancialText text={value} glossary={glossary} /></p></div>)}</div>;
@@ -398,10 +405,10 @@ export default function Home() {
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
           <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} /></span></div>}</div>
-          <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p>{item.original}</p></blockquote>
+          <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p><ReadableOriginal text={item.original} /></p></blockquote>
         </article>)}</div>
         <button className="allClausesButton" type="button" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>{showAll ? "전체 조항 접기" : `전체 ${analysis.items.length}개 조항 보기`}<span>{showAll ? "↑" : "↓"}</span></button>
-        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “{item.original}”</small></div></details>)}</div>}
+        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “<ReadableOriginal text={item.original} />”</small></div></details>)}</div>}
       </section>
 
       <section className="chatSection">
@@ -413,7 +420,7 @@ export default function Home() {
           {!messages.length && <div className="chatWelcome"><span>✦</span><div><b>아직 대화가 없어요</b><p>위에 질문을 적거나 예시 질문을 눌러보세요. 답은 계약서에 적힌 내용만 보고 알려드려요.</p></div></div>}
           {messages.map((message, index) => <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
             <div className="bubble">{message.role === "assistant" && <b>{message.notFound ? "문서에서 확인되지 않음" : "문서 기반 답변"}</b>}<p>{message.role === "assistant" ? <FinancialText text={message.text} glossary={message.glossary} /> : message.text}</p></div>
-            {message.citations?.map((citation, citationIndex) => <blockquote key={citationIndex}><span>근거 원문{citation.page ? ` · ${citation.page}쪽` : ""}</span><p>“{citation.original}”</p><small>{citation.relevance}</small></blockquote>)}
+            {message.citations?.map((citation, citationIndex) => <blockquote key={citationIndex}><span>근거 원문{citation.page ? ` · ${citation.page}쪽` : ""}</span><p>“<ReadableOriginal text={citation.original} />”</p><small>{citation.relevance}</small></blockquote>)}
           </div>)}
           {asking && <div className="message assistant"><div className="bubble typing"><i /><i /><i /></div></div>}
           {chatError && <p className="chatError">{chatError}</p>}

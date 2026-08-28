@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-3_prompt-13_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-4_prompt-13_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -12,6 +12,16 @@ type Line = { page: number; y: number; height: number; text: string };
 const boundaryPattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])(?:\s|$)/;
 const markerPattern = /^(제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
 const normalize = (text: string) => text.normalize("NFKC").replace(/\s+/g, " ").trim();
+const brokenGlyphPattern = /[□■�\u0000]/g;
+function cleanExtractedText(text: string) {
+  const normalized = normalize(text);
+  const brokenCount = normalized.match(brokenGlyphPattern)?.length ?? 0;
+  if (!brokenCount) return normalized;
+  // 글꼴의 ToUnicode 정보가 없는 PDF는 읽지 못한 글자를 네모로 반환합니다.
+  // 깨진 조각을 AI 입력에 남겨 허위 설명이 만들어지는 것보다 확인 가능한 글자만 보존합니다.
+  const cleaned = normalize(normalized.replace(brokenGlyphPattern, " "));
+  return cleaned.length >= 4 ? cleaned : "";
+}
 const compact = (text: string) => normalize(text).replace(/[\s\p{P}]/gu, "").toLowerCase();
 const infoDefinitions = [
   ["계약 종류", ["계약 종류", "계약서 종류"], "어떤 종류의 금융 계약인지 보여주는 정보입니다."],
@@ -84,7 +94,7 @@ function classify(text: string): { signals: RiskSignals; level: RawClause["level
 function groupLines(items: Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, page: number) {
   const groups: Line[] = [];
   for (const item of items) {
-    const text = normalize(item.str ?? "");
+    const text = cleanExtractedText(item.str ?? "");
     if (!text) continue;
     const y = item.transform?.[5] ?? 0;
     const height = Math.max(item.height ?? Math.abs(item.transform?.[3] ?? 10), 1);
