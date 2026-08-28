@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-4_prompt-13_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-5_prompt-14_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -61,7 +61,8 @@ function extractNonClauses(pages: Line[][]) {
     }
   }
   if (!usedLabels.has("계약 종류")) {
-    const title = pages[0]?.slice(0, 8).find((line) => line.text.length <= 80 && /(계약서|약정서|약관|신청서)/.test(line.text));
+    const documentTitlePattern = /^.{1,35}(?:계약서|약정서|약관|신청서)(?:\s*\([^)]{1,30}\))?$/;
+    const title = pages[0]?.slice(0, 12).find((line) => documentTitlePattern.test(line.text) && !/(하여야|해야|합니다|됩니다|있습니다|없습니다)/.test(line.text));
     if (title) {
       basicInfo.unshift({ label: "계약 종류", value: title.text, explanation: "문서 제목에 표시된 계약의 종류입니다.", page: title.page });
       excluded.add(`${title.page}:${compact(title.text)}`);
