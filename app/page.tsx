@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis, type BasicInfo, type DocumentNotice, type RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
@@ -93,11 +93,31 @@ function TermHelp({ term, definition }: GlossaryTerm) {
 }
 
 function FinancialText({ text, glossary = [] }: { text: string; glossary?: GlossaryTerm[] }) {
-  const definitions = new Map(glossary.filter(({ term, definition }) => term.trim() && definition.trim()).map((entry) => [entry.term.trim(), entry.definition.trim()]));
+  const partyTerms = new Set(["갑", "을"]);
+  const definitions = new Map(glossary
+    .filter(({ term, definition }) => {
+      const normalized = term.trim();
+      return definition.trim() && (normalized.length >= 2 || partyTerms.has(normalized));
+    })
+    .map((entry) => [entry.term.trim(), entry.definition.trim()]));
   const terms = [...definitions.keys()].sort((a, b) => b.length - a.length);
   if (!terms.length) return <>{text}</>;
-  const pattern = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
-  return <>{text.split(pattern).map((part, index) => definitions.has(part) ? <TermHelp key={`${part}-${index}`} term={part} definition={definitions.get(part)!} /> : <span key={index}>{part}</span>)}</>;
+  const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const term = match[0];
+    const start = match.index;
+    if (start > cursor) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor, start)}</span>);
+    const previous = start > 0 ? text[start - 1] : "";
+    const isAttachedParticle = partyTerms.has(term) && /[가-힣A-Za-z0-9]/.test(previous);
+    parts.push(isAttachedParticle
+      ? <span key={`plain-${start}`}>{term}</span>
+      : <TermHelp key={`term-${start}`} term={term} definition={definitions.get(term)!} />);
+    cursor = start + term.length;
+  }
+  if (cursor < text.length) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor)}</span>);
+  return <>{parts}</>;
 }
 
 function ExplanationSections({ item, glossary }: { item: Item; glossary: GlossaryTerm[] }) {
