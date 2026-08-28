@@ -101,12 +101,11 @@ function TermHelp({ term, definition }: GlossaryTerm) {
 }
 
 function FinancialText({ text, glossary = [] }: { text: string; glossary?: GlossaryTerm[] }) {
-  const partyTerms = new Set(["갑", "을"]);
   const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람"]);
   const definitions = new Map(glossary
     .filter(({ term, definition }) => {
       const normalized = term.trim();
-      return definition.trim() && !everydayTerms.has(normalized) && (normalized.length >= 2 || partyTerms.has(normalized));
+      return definition.trim() && !everydayTerms.has(normalized) && normalized.length >= 2;
     })
     .map((entry) => [entry.term.trim(), entry.definition.trim()]));
   const terms = [...definitions.keys()].sort((a, b) => b.length - a.length);
@@ -118,11 +117,7 @@ function FinancialText({ text, glossary = [] }: { text: string; glossary?: Gloss
     const term = match[0];
     const start = match.index;
     if (start > cursor) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor, start)}</span>);
-    const previous = start > 0 ? text[start - 1] : "";
-    const isAttachedParticle = partyTerms.has(term) && /[가-힣A-Za-z0-9]/.test(previous);
-    parts.push(isAttachedParticle
-      ? <span key={`plain-${start}`}>{term}</span>
-      : <TermHelp key={`term-${start}`} term={term} definition={definitions.get(term)!} />);
+    parts.push(<TermHelp key={`term-${start}`} term={term} definition={definitions.get(term)!} />);
     cursor = start + term.length;
   }
   if (cursor < text.length) parts.push(<span key={`text-${cursor}`}>{text.slice(cursor)}</span>);
