@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-5_prompt-14_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-6_prompt-15_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -21,6 +21,18 @@ function cleanExtractedText(text: string) {
   // 깨진 조각을 AI 입력에 남겨 허위 설명이 만들어지는 것보다 확인 가능한 글자만 보존합니다.
   const cleaned = normalize(normalized.replace(brokenGlyphPattern, " "));
   return cleaned.length >= 4 ? cleaned : "";
+}
+function isDecorativeOrLayoutOnly(text: string) {
+  const value = normalize(text);
+  if (!value) return true;
+  const compactValue = value.replace(/\s/g, "");
+  const meaningful = compactValue.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+  // 선, 점선, 네모, 체크박스, 빈칸용 밑줄처럼 문자 정보가 없는 시각 요소
+  if (compactValue.length >= 4 && meaningful === 0) return true;
+  if (/^(?:[-‐‑‒–—―_=~·.ㆍ•●○□■▢▪▫◆◇※*|│┃┄┅┈┉┊┋┌-╿]\s*){4,}$/u.test(value)) return true;
+  // 글꼴 매핑 오류로 서로 다른 기호가 섞인 긴 장식선도 제외
+  if (compactValue.length >= 8 && meaningful / compactValue.length < .2) return true;
+  return false;
 }
 const compact = (text: string) => normalize(text).replace(/[\s\p{P}]/gu, "").toLowerCase();
 const infoDefinitions = [
@@ -96,7 +108,7 @@ function groupLines(items: Array<{ str?: string; transform?: number[]; height?: 
   const groups: Line[] = [];
   for (const item of items) {
     const text = cleanExtractedText(item.str ?? "");
-    if (!text) continue;
+    if (!text || isDecorativeOrLayoutOnly(text)) continue;
     const y = item.transform?.[5] ?? 0;
     const height = Math.max(item.height ?? Math.abs(item.transform?.[3] ?? 10), 1);
     const existing = groups.find((line) => Math.abs(line.y - y) <= Math.max(2, height * .28));
@@ -148,7 +160,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const merged: Array<{ page: number; text: string; marked: boolean; heading: boolean }> = [];
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
-    if (!text || text.length < 4) continue;
+    if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text)) continue;
     const previous = merged[merged.length - 1];
     const previousIsIncomplete = previous && !/[.!?。]$/.test(previous.text);
     const sameClause = previous && previous.page === block.page && !block.marked && !block.heading && (previous.marked || previous.heading || previousIsIncomplete);
