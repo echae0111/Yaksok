@@ -1,16 +1,64 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-1_prompt-7_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-2_prompt-7_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
+export type BasicInfo = { label: string; value: string; explanation: string; page: number };
+export type DocumentNotice = { text: string; page: number };
 type Line = { page: number; y: number; height: number; text: string };
 
 const boundaryPattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])(?:\s|$)/;
 const markerPattern = /^(제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
 const normalize = (text: string) => text.normalize("NFKC").replace(/\s+/g, " ").trim();
 const compact = (text: string) => normalize(text).replace(/[\s\p{P}]/gu, "").toLowerCase();
+const infoDefinitions = [
+  ["계약 종류", ["계약 종류", "계약서 종류"], "어떤 종류의 금융 계약인지 보여주는 정보입니다."],
+  ["상품명", ["상품명", "금융상품명"], "가입하거나 이용하는 금융상품의 이름입니다."],
+  ["금융회사", ["금융회사", "금융기관", "회사명", "채권자", "대주"], "이 계약을 제공하거나 돈을 빌려주는 회사입니다."],
+  ["채무자", ["채무자", "차주", "대출받는 사람", "계약자"], "계약에 따라 돈을 갚거나 의무를 지는 사람입니다."],
+  ["대출금액", ["대출금액", "대출 원금", "대출원금", "약정금액"], "이 계약에 따라 빌리는 원금입니다."],
+  ["계약일", ["계약일", "계약 체결일", "약정일", "작성일"], "계약을 체결하거나 작성한 날짜입니다."],
+  ["계약기간", ["계약기간", "대출기간", "약정기간"], "계약의 효력이 유지되는 기간입니다."],
+  ["적용기간", ["적용기간", "보장기간"], "이 계약의 조건이 적용되는 기간입니다."],
+  ["계약번호", ["계약번호", "계약 번호", "문서번호", "약정번호", "계좌번호"], "이 계약을 다른 계약과 구분하기 위한 식별번호입니다."],
+] as const;
+const infoAliases = infoDefinitions.flatMap(([label, aliases, explanation]) => aliases.map((alias) => ({ alias, label, explanation })));
+const aliasPattern = infoAliases.map(({ alias }) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length).join("|");
+const noticePattern = /(테스트용|시험용|가상(?:의)?\s*문서|실제\s*계약(?:으로)?\s*(?:사용|이용)할\s*수\s*없|서비스\s*검증용|분석\s*기능을\s*(?:시험|검증)|참고용|법적\s*효력(?:이)?\s*없)/i;
+
+function extractNonClauses(pages: Line[][]) {
+  const basicInfo: BasicInfo[] = [];
+  const notices: DocumentNotice[] = [];
+  const excluded = new Set<string>();
+  const usedLabels = new Set<string>();
+  for (const lines of pages) for (const line of lines) {
+    const key = `${line.page}:${compact(line.text)}`;
+    const matches = [...line.text.matchAll(new RegExp(`(?:^|\\s)(${aliasPattern})\\s*[:：]\\s*(.+?)(?=\\s+(?:${aliasPattern})\\s*[:：]|$)`, "g"))];
+    for (const match of matches) {
+      const definition = infoAliases.find(({ alias }) => alias === match[1]);
+      const value = normalize(match[2]);
+      if (definition && value && !usedLabels.has(definition.label)) {
+        basicInfo.push({ label: definition.label, value, explanation: definition.explanation, page: line.page });
+        usedLabels.add(definition.label);
+        excluded.add(key);
+      }
+    }
+    if (noticePattern.test(line.text)) {
+      notices.push({ text: line.text, page: line.page });
+      excluded.add(key);
+    }
+  }
+  if (!usedLabels.has("계약 종류")) {
+    const title = pages[0]?.slice(0, 8).find((line) => line.text.length <= 80 && /(계약서|약정서|약관|신청서)/.test(line.text));
+    if (title) {
+      basicInfo.unshift({ label: "계약 종류", value: title.text, explanation: "문서 제목에 표시된 계약의 종류입니다.", page: title.page });
+      excluded.add(`${title.page}:${compact(title.text)}`);
+    }
+  }
+  return { basicInfo, notices: [...new Map(notices.map((notice) => [`${notice.page}:${compact(notice.text)}`, notice])).values()], excluded };
+}
 
 async function sha256(value: ArrayBuffer | string) {
   const data = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -65,7 +113,7 @@ function pageBlocks(lines: Line[]) {
   return blocks;
 }
 
-export async function parseContract(file: File, onPageProgress?: (currentPage: number, totalPages: number) => void): Promise<{ documentHash: string; clauses: RawClause[] }> {
+export async function parseContract(file: File, onPageProgress?: (currentPage: number, totalPages: number) => void): Promise<{ documentHash: string; clauses: RawClause[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] }> {
   const data = await file.arrayBuffer();
   const documentHash = await sha256(data);
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -83,7 +131,8 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const edgeCounts = new Map<string, number>();
   for (const lines of pages) for (const line of [...lines.slice(0, 2), ...lines.slice(-2)]) edgeCounts.set(compact(line.text), (edgeCounts.get(compact(line.text)) ?? 0) + 1);
   const repeated = new Set([...edgeCounts].filter(([key, count]) => key.length > 2 && count >= Math.max(3, Math.ceil(pdf.numPages * .45))).map(([key]) => key));
-  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)))));
+  const separated = extractNonClauses(pages);
+  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`))));
 
   const merged: Array<{ page: number; text: string }> = [];
   for (const block of blocks) {
@@ -107,7 +156,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     clauses.push({ id, page: block.page, order: clauses.length, marker, text: block.text, original: block.text.slice(0, 700), ...risk });
   }
   if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
-  return { documentHash, clauses };
+  return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };
 }
 
 const DB_NAME = "yaksok-analysis-cache";

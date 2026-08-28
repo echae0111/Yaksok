@@ -1,11 +1,11 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis, type RawClause } from "./contract-parser";
+import { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis, type BasicInfo, type DocumentNotice, type RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
 type Item = { id: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
-type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[] };
+type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
 type ClauseExplanation = { clauseId: string; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
@@ -173,7 +173,7 @@ export default function Home() {
       const overview = await readApiJson<{ documentType: string; summary: string }>(response);
       if (!response.ok) throw new Error(overview.error || "분석 결과를 정리하지 못했어요.");
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
-      const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary };
+      const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
       setAnalysis(data); setStatus("done");
       window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
@@ -221,6 +221,8 @@ export default function Home() {
     {analysis && <>
       <section className="resultSection" id="results" aria-live="polite">
         <div className="sectionHead"><div><span className="miniLabel">실제 분석 결과</span><h2>{analysis.documentType}</h2></div></div>
+        {!!analysis.basicInfo.length && <section className="basicInfoBox"><div className="infoTitle"><span>01</span><div><h3>계약 기본정보</h3><p>계약을 식별하는 정보이며 전체 조항 수에는 포함하지 않았어요.</p></div></div><div className="infoGrid">{analysis.basicInfo.map((info) => <div className="infoItem" key={`${info.label}-${info.page}`}><b>{info.label}</b><strong>{info.value}</strong><p>{info.explanation}</p></div>)}</div></section>}
+        {!!analysis.notices.length && <aside className="documentNotices"><div><b>문서 안내</b><span>계약 조건이 아니므로 조항 수에서 제외했어요.</span></div>{analysis.notices.map((notice, index) => <p key={`${notice.page}-${index}`}>{notice.text}<small>{notice.page}쪽</small></p>)}</aside>}
         <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 구간 확인 완료</b><p>총 <strong>{analysis.items.length}개 항목</strong>을 확인했습니다.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
         <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
         <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 조항 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
