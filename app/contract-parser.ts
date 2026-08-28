@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-2_prompt-9_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-3_prompt-10_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -96,10 +96,10 @@ function groupLines(items: Array<{ str?: string; transform?: number[]; height?: 
 }
 
 function pageBlocks(lines: Line[]) {
-  if (!lines.length) return [] as Array<{ page: number; lines: string[]; marked: boolean }>;
+  if (!lines.length) return [] as Array<{ page: number; lines: string[]; marked: boolean; heading: boolean }>;
   const heights = lines.map((line) => line.height).sort((a, b) => a - b);
   const median = heights[Math.floor(heights.length / 2)] || 10;
-  const blocks: Array<{ page: number; lines: string[]; marked: boolean }> = [];
+  const blocks: Array<{ page: number; lines: string[]; marked: boolean; heading: boolean }> = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (/^\d{1,4}$/.test(line.text)) continue;
@@ -107,7 +107,7 @@ function pageBlocks(lines: Line[]) {
     const gap = previous ? previous.y - line.y : 0;
     const marked = boundaryPattern.test(line.text);
     const looksLikeHeading = line.text.length <= 45 && !/[.!?。]$/.test(line.text) && gap > median * 1.4;
-    if (!blocks.length || marked || looksLikeHeading || gap > median * 2.2) blocks.push({ page: line.page, lines: [line.text], marked });
+    if (!blocks.length || marked || looksLikeHeading || gap > median * 2.2) blocks.push({ page: line.page, lines: [line.text], marked, heading: looksLikeHeading });
     else blocks[blocks.length - 1].lines.push(line.text);
   }
   return blocks;
@@ -134,12 +134,15 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const separated = extractNonClauses(pages);
   const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`))));
 
-  const merged: Array<{ page: number; text: string }> = [];
+  const merged: Array<{ page: number; text: string; marked: boolean; heading: boolean }> = [];
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
     if (!text || text.length < 4) continue;
-    if (!block.marked && merged.length && block === blocks.find((candidate) => candidate.page === block.page)) merged[merged.length - 1].text = normalize(`${merged[merged.length - 1].text} ${text}`);
-    else merged.push({ page: block.page, text });
+    const previous = merged[merged.length - 1];
+    const previousIsIncomplete = previous && !/[.!?。]$/.test(previous.text);
+    const sameClause = previous && previous.page === block.page && !block.marked && !block.heading && (previous.marked || previous.heading || previousIsIncomplete);
+    if (sameClause) previous.text = normalize(`${previous.text} ${text}`);
+    else merged.push({ page: block.page, text, marked: block.marked, heading: block.heading });
   }
 
   const unique = new Set<string>();
