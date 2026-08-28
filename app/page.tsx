@@ -11,6 +11,14 @@ type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
+const financeQuizzes = [
+  { question: "대출 만기일은 어떤 날일까요?", choices: ["대출 신청일", "남은 대출금을 모두 갚기로 한 마지막 날", "이자를 처음 내는 날"], answer: 1, explanation: "대출 만기일은 원칙적으로 남은 원금을 모두 갚아야 하는 마지막 날이에요." },
+  { question: "변동금리 대출의 특징은 무엇일까요?", choices: ["금리가 계약 내내 같아요", "정해진 기준에 따라 금리가 바뀔 수 있어요", "이자를 내지 않아도 돼요"], answer: 1, explanation: "변동금리는 기준금리 등이 달라지면 내가 내는 이자도 오르거나 내릴 수 있어요." },
+  { question: "중도상환수수료는 언제 생길 수 있을까요?", choices: ["대출금을 약속보다 일찍 갚을 때", "대출금을 늦게 갚을 때", "계좌를 새로 만들 때"], answer: 0, explanation: "대출금을 계약 기간보다 일찍 갚을 때 생길 수 있는 비용이에요. 적용 기간과 계산 방법을 확인해야 해요." },
+  { question: "연체이자는 무엇일까요?", choices: ["돈을 늦게 갚을 때 추가로 붙는 이자", "예금에 붙는 이자", "대출 신청 수수료"], answer: 0, explanation: "정해진 날까지 돈을 내지 못하면 원래 이자 외에 추가 부담이 생길 수 있어요." },
+  { question: "고정금리의 뜻으로 맞는 것은?", choices: ["계약에서 정한 기간 동안 금리가 고정돼요", "매달 금리가 무조건 내려가요", "원금을 갚지 않아도 돼요"], answer: 0, explanation: "고정금리는 약속한 기간 동안 적용 금리가 바뀌지 않아 이자 부담을 예상하기 쉬워요." },
+  { question: "자동 연장을 막고 싶다면 가장 먼저 볼 것은?", choices: ["계약서의 연장 거절 통지 기한", "금융회사 광고", "계약서의 글자 크기"], answer: 0, explanation: "자동 연장 조항에는 언제까지 거절 의사를 알려야 하는지가 적혀 있으므로 그 기한이 중요해요." },
+];
 const CLAUSES_PER_BATCH = 8;
 const BATCH_CONCURRENCY = 1;
 type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
@@ -126,6 +134,19 @@ function ExplanationSections({ item, glossary }: { item: Item; glossary: Glossar
   return <div className="explanationSections">{sections.map(([label, value]) => <div className="explanationRow" key={label}><b>{label}</b><p><FinancialText text={value} glossary={glossary} /></p></div>)}</div>;
 }
 
+function WaitingQuiz() {
+  const [quizIndex, setQuizIndex] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
+  const quiz = financeQuizzes[quizIndex];
+  const next = () => { setQuizIndex((current) => (current + 1) % financeQuizzes.length); setSelected(null); };
+  return <section className="waitingQuiz" aria-label="기다리는 동안 푸는 금융 상식 퀴즈">
+    <div className="quizHead"><span>기다리는 동안</span><b>금융 상식 한 문제</b><small>{quizIndex + 1} / {financeQuizzes.length}</small></div>
+    <p>{quiz.question}</p>
+    <div className="quizChoices">{quiz.choices.map((choice, index) => <button type="button" key={choice} disabled={selected !== null} className={selected === null ? "" : index === quiz.answer ? "correct" : selected === index ? "wrong" : ""} onClick={(event) => { event.stopPropagation(); setSelected(index); }}>{choice}</button>)}</div>
+    {selected !== null && <div className={`quizResult ${selected === quiz.answer ? "correct" : "wrong"}`}><b>{selected === quiz.answer ? "정답이에요!" : "아쉬워요. 정답을 확인해 보세요."}</b><span>{quiz.explanation}</span><button type="button" onClick={(event) => { event.stopPropagation(); next(); }}>다음 문제 →</button></div>}
+  </section>;
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -234,7 +255,7 @@ export default function Home() {
       <div className={`upload ${status !== "idle" ? "active" : ""}`} onClick={() => status === "idle" && inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); analyze(event.dataTransfer.files[0]); }} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && status === "idle" && inputRef.current?.click()} aria-label="PDF 파일 업로드">
         <input ref={inputRef} type="file" accept="application/pdf,.pdf" hidden onChange={(event) => analyze(event.target.files?.[0])} />
         {status === "idle" && <><div className="uploadIcon">↑</div><strong>계약서 PDF를 여기에 놓으세요</strong><span>또는 클릭해서 파일 선택 · 최대 10MB</span><button type="button">PDF 선택하기</button></>}
-        {status === "analyzing" && <div className="loadingBlock"><div className="spinner" /><strong>{file?.name}</strong><span>{progress.phase}</span><div className="progressPanel" aria-live="polite"><div className="progressMeta"><b>{formatProgressCount(progress)}</b><time>{formatElapsed(elapsedSeconds)}</time></div><div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="계약서 분석 진행률"><i style={{ width: `${Math.min(progress.percent, 98)}%` }} /></div><div className="progressFoot"><span>{Math.min(progress.percent, 98)}%</span><small>긴 계약서는 몇 분 정도 걸릴 수 있어요. 창을 닫지 말아 주세요.</small></div></div></div>}
+        {status === "analyzing" && <div className="loadingBlock"><div className="spinner" /><strong>{file?.name}</strong><span>{progress.phase}</span><div className="progressPanel" aria-live="polite"><div className="progressMeta"><b>{formatProgressCount(progress)}</b><time>{formatElapsed(elapsedSeconds)}</time></div><div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="계약서 분석 진행률"><i style={{ width: `${Math.min(progress.percent, 98)}%` }} /></div><div className="progressFoot"><span>{Math.min(progress.percent, 98)}%</span><small>긴 계약서는 몇 분 정도 걸릴 수 있어요. 창을 닫지 말아 주세요.</small></div></div><WaitingQuiz /></div>}
         {status === "done" && <div className="fileDone"><span className="check">✓</span><div><strong>{file?.name}</strong><span>문서 분석이 완료되었습니다</span></div><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다른 파일</button></div>}
         {status === "error" && <div className="errorBlock"><span className="errorIcon">!</span><strong>분석하지 못했어요</strong><span>{error}</span><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다시 선택하기</button></div>}
       </div>
