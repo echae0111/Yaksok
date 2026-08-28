@@ -1,14 +1,14 @@
 import { CONTRACT_CLAUSE_EXPLANATION_PROMPT } from "../../ai-prompts";
 
-const explanationSchema = {
+const explanationSchema = (clauseCount: number) => ({
   type: "object", additionalProperties: false,
   required: ["explanations", "glossary"],
   properties: {
-    explanations: { type: "array", minItems: 1, maxItems: 10, items: {
+    explanations: { type: "array", minItems: clauseCount, maxItems: clauseCount, items: {
       type: "object", additionalProperties: false,
-      required: ["clauseId", "title", "core", "easyExplanation", "impact", "checkPoint", "action"],
+      required: ["title", "core", "easyExplanation", "impact", "checkPoint", "action"],
       properties: {
-        clauseId: { type: "string" }, title: { type: "string" }, core: { type: "string" },
+        title: { type: "string" }, core: { type: "string" },
         easyExplanation: { type: "string" }, impact: { type: "string" }, checkPoint: { type: "string" }, action: { type: "string" },
       },
     } },
@@ -17,7 +17,7 @@ const explanationSchema = {
       properties: { term: { type: "string" }, definition: { type: "string" } },
     } },
   },
-} as const;
+} as const);
 
 type InputClause = { id: string; page: number; marker: string; text: string };
 function jsonError(message: string, status: number) { return Response.json({ error: message }, { status }); }
@@ -38,8 +38,8 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model: "gpt-5.4-2026-03-05", store: false,
         instructions: CONTRACT_CLAUSE_EXPLANATION_PROMPT,
-        input: JSON.stringify(clauses),
-        text: { format: { type: "json_schema", name: "fixed_clause_explanations", strict: true, schema: explanationSchema } },
+        input: JSON.stringify(clauses.map(({ page, marker, text }) => ({ page, marker, text }))),
+        text: { format: { type: "json_schema", name: "fixed_clause_explanations", strict: true, schema: explanationSchema(clauses.length) } },
       }),
     });
     if (!response.ok) {
@@ -49,11 +49,12 @@ export async function POST(request: Request) {
     const payload = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
     const text = getOutputText(payload);
     if (!text) return jsonError("조항 설명을 읽지 못했습니다.", 502);
-    const result = JSON.parse(text) as { explanations: Array<{ clauseId: string }>; glossary: unknown[] };
-    const expected = new Set(clauses.map((clause) => clause.id));
-    const returned = new Set(result.explanations.map((item) => item.clauseId));
-    if (returned.size !== expected.size || [...expected].some((id) => !returned.has(id))) return jsonError("일부 조항 설명이 누락됐습니다.", 502);
-    return Response.json(result);
+    const result = JSON.parse(text) as { explanations: Array<Record<string, string>>; glossary: unknown[] };
+    if (result.explanations.length !== clauses.length) return jsonError("일부 조항 설명이 누락됐습니다.", 502);
+    return Response.json({
+      explanations: result.explanations.map((explanation, index) => ({ ...explanation, clauseId: clauses[index].id })),
+      glossary: result.glossary,
+    });
   } catch (reason) {
     console.error("Clause explanation failed", reason);
     return jsonError("계약서 조항을 설명하지 못했습니다.", 502);

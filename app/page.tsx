@@ -11,8 +11,9 @@ type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
 const suggestions = ["해지하면 손해인가요?", "자동 연장은 언제 막나요?", "보장 안 되는 경우는?", "가장 불리한 조건은?"];
-const CLAUSES_PER_BATCH = 8;
+const CLAUSES_PER_BATCH = 5;
 const BATCH_CONCURRENCY = 2;
+type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
 
 async function readApiJson<T>(response: Response): Promise<T & { error?: string }> {
   const contentType = response.headers.get("content-type") ?? "";
@@ -22,15 +23,30 @@ async function readApiJson<T>(response: Response): Promise<T & { error?: string 
   catch { throw new Error("분석 결과를 읽지 못했어요. 잠시 후 다시 시도해 주세요."); }
 }
 
+async function requestClauseBatch(clauses: RawClause[]) {
+  const input = clauses.map(({ id, page, marker, text }) => ({ id, page, marker, text }));
+  const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clauses: input }) });
+  const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }>(response);
+  if (!response.ok) throw new Error(data.error || "계약서 조항을 설명하지 못했어요.");
+  if (data.explanations.length !== clauses.length) throw new Error("일부 조항 설명이 누락됐어요.");
+  return data;
+}
+
 async function explainClauseBatch(clauses: RawClause[]) {
-  const request = async () => {
-    const input = clauses.map(({ id, page, marker, text }) => ({ id, page, marker, text }));
-    const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clauses: input }) });
-    const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }>(response);
-    if (!response.ok) throw new Error(data.error || "계약서 조항을 설명하지 못했어요.");
-    return data;
-  };
-  try { return await request(); } catch { return request(); }
+  try { return await requestClauseBatch(clauses); }
+  catch {
+    try { return await requestClauseBatch(clauses); }
+    catch {
+      const individual = await Promise.all(clauses.map(async (clause) => {
+        try { return await requestClauseBatch([clause]); }
+        catch { return requestClauseBatch([clause]); }
+      }));
+      return {
+        explanations: individual.flatMap((result) => result.explanations),
+        glossary: individual.flatMap((result) => result.glossary),
+      };
+    }
+  }
 }
 
 function TermHelp({ term, definition }: GlossaryTerm) {
@@ -78,10 +94,26 @@ export default function Home() {
       const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
       const cached = await getCachedAnalysis<Analysis>(cacheKey);
       if (cached) { setAnalysis(cached); setStatus("done"); window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100); return; }
-      const batches = Array.from({ length: Math.ceil(parsed.clauses.length / CLAUSES_PER_BATCH) }, (_, index) => parsed.clauses.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
-      const explained: Array<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[] }> = [];
-      for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) explained.push(...await Promise.all(batches.slice(index, index + BATCH_CONCURRENCY).map(explainClauseBatch)));
-      const explanationMap = new Map(explained.flatMap((batch) => batch.explanations).map((entry) => [entry.clauseId, entry]));
+      const saved = await Promise.all(parsed.clauses.map(async (clause) => ({ clause, cached: await getCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`) })));
+      const explanationMap = new Map(saved.filter((entry) => entry.cached).map((entry) => [entry.clause.id, entry.cached!.explanation]));
+      const glossaryParts = saved.flatMap((entry) => entry.cached?.glossary ?? []);
+      const pending = saved.filter((entry) => !entry.cached).map((entry) => entry.clause);
+      const batches = Array.from({ length: Math.ceil(pending.length / CLAUSES_PER_BATCH) }, (_, index) => pending.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
+      for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) {
+        const group = batches.slice(index, index + BATCH_CONCURRENCY);
+        const results = await Promise.all(group.map(explainClauseBatch));
+        for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
+          const result = results[resultIndex];
+          const batch = group[resultIndex];
+          for (const clause of batch) {
+            const explanation = result.explanations.find((entry) => entry.clauseId === clause.id);
+            if (!explanation) throw new Error("일부 조항 설명이 누락됐어요.");
+            explanationMap.set(clause.id, explanation);
+            await setCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`, { explanation, glossary: result.glossary });
+          }
+          glossaryParts.push(...result.glossary);
+        }
+      }
       const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
       const items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
         const explanation = explanationMap.get(clause.id);
@@ -91,7 +123,7 @@ export default function Home() {
       const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
       const overview = await readApiJson<{ documentType: string; summary: string }>(response);
       if (!response.ok) throw new Error(overview.error || "분석 결과를 정리하지 못했어요.");
-      const glossary = [...new Map(explained.flatMap((batch) => batch.glossary).map((entry) => [entry.term, entry])).values()];
+      const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary };
       await setCachedAnalysis(cacheKey, data);
       setAnalysis(data); setStatus("done");

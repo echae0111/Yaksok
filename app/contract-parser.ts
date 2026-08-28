@@ -1,6 +1,6 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-export const ANALYSIS_VERSION = "parser-1_prompt-6_risk-1_gpt-5.4-2026-03-05";
+export const ANALYSIS_VERSION = "parser-1_prompt-7_risk-1_gpt-5.4-2026-03-05";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
