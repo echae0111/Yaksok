@@ -1,6 +1,6 @@
 "use client";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis, type BasicInfo, type DocumentNotice, type RawClause } from "./contract-parser";
+import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
@@ -94,10 +94,11 @@ function TermHelp({ term, definition }: GlossaryTerm) {
 
 function FinancialText({ text, glossary = [] }: { text: string; glossary?: GlossaryTerm[] }) {
   const partyTerms = new Set(["갑", "을"]);
+  const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람"]);
   const definitions = new Map(glossary
     .filter(({ term, definition }) => {
       const normalized = term.trim();
-      return definition.trim() && (normalized.length >= 2 || partyTerms.has(normalized));
+      return definition.trim() && !everydayTerms.has(normalized) && (normalized.length >= 2 || partyTerms.has(normalized));
     })
     .map((entry) => [entry.term.trim(), entry.definition.trim()]));
   const terms = [...definitions.keys()].sort((a, b) => b.length - a.length);
@@ -153,6 +154,8 @@ export default function Home() {
     if (selected.size > 10 * 1024 * 1024) { setError("파일은 10MB 이하로 올려 주세요."); setStatus("error"); return; }
     setFile(selected); setError(""); setAnalysis(null); setMessages([]); setElapsedSeconds(0); setProgress({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 }); setStatus("analyzing");
     try {
+      // PDF 처리 코드는 파일을 선택한 뒤에만 불러와 첫 화면을 가볍게 유지합니다.
+      const { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis } = await import("./contract-parser");
       const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }));
       setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
       const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
