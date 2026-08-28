@@ -147,6 +147,26 @@ function WaitingQuiz() {
   </section>;
 }
 
+function mergeSimilarItems(items: Item[], groups: Array<{ indexes: number[] }>) {
+  const levelRank = { danger: 0, caution: 1, important: 2, general: 3 } as const;
+  const removed = new Set<number>();
+  const replacements = new Map<number, Item>();
+  for (const { indexes } of groups) {
+    const valid = [...new Set(indexes)].filter((index) => index >= 0 && index < items.length && !removed.has(index)).sort((a, b) => a - b);
+    if (valid.length < 2) continue;
+    const target = valid[0];
+    const detailLength = (item: Item) => item.title.length + item.core.length + item.easyExplanation.length + item.impact.length + item.checkPoint.length + item.action.length;
+    const representative = valid.reduce((best, index) => detailLength(items[index]) > detailLength(items[best]) ? index : best, target);
+    const pages = [...new Set(valid.map((index) => items[index].page).filter((page): page is number => page !== null))];
+    const originals = [...new Set(valid.map((index) => items[index].original.trim()).filter(Boolean))];
+    const level = valid.map((index) => items[index].level).sort((a, b) => levelRank[a] - levelRank[b])[0];
+    const longest = (field: "title" | "core" | "easyExplanation" | "impact" | "checkPoint" | "action") => valid.map((index) => items[index][field]).sort((a, b) => b.length - a.length)[0];
+    replacements.set(target, { ...items[representative], id: items[target].id, level, title: longest("title"), core: longest("core"), easyExplanation: longest("easyExplanation"), impact: longest("impact"), checkPoint: longest("checkPoint"), action: longest("action"), page: pages.length === 1 ? pages[0] : null, original: originals.join("\n\n") });
+    valid.slice(1).forEach((index) => removed.add(index));
+  }
+  return items.map((item, index) => replacements.get(index) ?? item).filter((_, index) => !removed.has(index));
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -207,15 +227,16 @@ export default function Home() {
         }
       }
       const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
-      const items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
+      let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
         return { id: clause.id, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item;
       });
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
-      const overview = await readApiJson<{ documentType: string; summary: string }>(response);
+      const overview = await readApiJson<{ documentType: string; summary: string; duplicateGroups?: Array<{ indexes: number[] }> }>(response);
       if (!response.ok) throw new Error(overview.error || "분석 결과를 정리하지 못했어요.");
+      items = mergeSimilarItems(items, overview.duplicateGroups ?? []);
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
