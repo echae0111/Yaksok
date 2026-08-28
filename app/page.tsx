@@ -4,7 +4,7 @@ import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { id: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
+type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
 type ClauseExplanation = { clauseId: string; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
@@ -23,6 +23,8 @@ const CLAUSES_PER_BATCH = 8;
 const BATCH_CONCURRENCY = 1;
 type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
 type AnalysisProgress = { phase: string; completed: number; total: number; percent: number };
+type DuplicateCandidate = { id: string; source: string; title: string; summary: string; effect: string };
+type DuplicateDecision = { keepId: string; mergeIds: string[] };
 class RateLimitError extends Error {
   constructor(message: string, public retryAfterSeconds: number, public quotaExhausted: boolean) { super(message); }
 }
@@ -142,24 +144,67 @@ function WaitingQuiz() {
   </section>;
 }
 
-function mergeSimilarItems(items: Item[], groups: Array<{ indexes: number[] }>) {
-  const levelRank = { danger: 0, caution: 1, important: 2, general: 3 } as const;
-  const removed = new Set<number>();
-  const replacements = new Map<number, Item>();
-  for (const { indexes } of groups) {
-    const valid = [...new Set(indexes)].filter((index) => index >= 0 && index < items.length && !removed.has(index)).sort((a, b) => a - b);
-    if (valid.length < 2) continue;
-    const target = valid[0];
-    const detailLength = (item: Item) => item.title.length + item.core.length + item.easyExplanation.length + item.impact.length + item.checkPoint.length + item.action.length;
-    const representative = valid.reduce((best, index) => detailLength(items[index]) > detailLength(items[best]) ? index : best, target);
-    const pages = [...new Set(valid.map((index) => items[index].page).filter((page): page is number => page !== null))];
-    const originals = [...new Set(valid.map((index) => items[index].original.trim()).filter(Boolean))];
-    const level = valid.map((index) => items[index].level).sort((a, b) => levelRank[a] - levelRank[b])[0];
-    const longest = (field: "title" | "core" | "easyExplanation" | "impact" | "checkPoint" | "action") => valid.map((index) => items[index][field]).sort((a, b) => b.length - a.length)[0];
-    replacements.set(target, { ...items[representative], id: items[target].id, level, title: longest("title"), core: longest("core"), easyExplanation: longest("easyExplanation"), impact: longest("impact"), checkPoint: longest("checkPoint"), action: longest("action"), page: pages.length === 1 ? pages[0] : null, original: originals.join("\n\n") });
-    valid.slice(1).forEach((index) => removed.add(index));
+function similarityText(value: string) {
+  return value.normalize("NFKC").toLowerCase()
+    .replace(/바뀌(?:는|어|었|ㄹ|게|다|ㅂ니다)?|변경(?:되는|되어|됐다|됩니다)?/g, "변경")
+    .replace(/갚(?:는|아야|으면|습니다)?|상환(?:하는|해야|합니다)?/g, "상환")
+    .replace(/받(?:는|았|습니다)?|교부(?:받|하는|합니다)?/g, "교부")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+function bigrams(value: string) {
+  const compact = similarityText(value).replace(/\s/g, "");
+  return new Set(Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2)));
+}
+
+function diceSimilarity(left: string, right: string) {
+  const a = bigrams(left); const b = bigrams(right);
+  if (!a.size || !b.size) return 0;
+  const overlap = [...a].filter((gram) => b.has(gram)).length;
+  return (2 * overlap) / (a.size + b.size);
+}
+
+function buildDuplicateCandidateGroups(items: Item[]) {
+  const parent = items.map((_, index) => index);
+  const explicitCounts = items.map((item) => item.marker.startsWith("BLOCK") ? 0 : 1);
+  const find = (index: number): number => parent[index] === index ? index : (parent[index] = find(parent[index]));
+  const unite = (left: number, right: number) => {
+    const a = find(left); const b = find(right);
+    if (a === b || explicitCounts[a] + explicitCounts[b] > 1) return;
+    parent[b] = a; explicitCounts[a] += explicitCounts[b];
+  };
+  const compact = items.map((item) => ({ title: similarityText(`${item.title} ${item.core}`), effect: similarityText(item.impact) }));
+  for (let left = 0; left < items.length; left++) for (let right = left + 1; right < items.length; right++) {
+    if (!items[left].marker.startsWith("BLOCK") && !items[right].marker.startsWith("BLOCK")) continue;
+    const titleScore = diceSimilarity(compact[left].title, compact[right].title);
+    const effectScore = diceSimilarity(compact[left].effect, compact[right].effect);
+    const leftTokens = new Set(compact[left].title.split(" ").filter((token) => token.length >= 3));
+    const sharedTopic = compact[right].title.split(" ").some((token) => token.length >= 3 && leftTokens.has(token));
+    if (titleScore >= .38 || (sharedTopic && titleScore >= .22 && effectScore >= .18)) unite(left, right);
   }
-  return items.map((item, index) => replacements.get(index) ?? item).filter((_, index) => !removed.has(index));
+  const groups = new Map<number, number[]>();
+  items.forEach((_, index) => { const root = find(index); groups.set(root, [...(groups.get(root) ?? []), index]); });
+  return [...groups.values()].filter((indexes) => indexes.length >= 2).flatMap((indexes) => {
+    const chunks: DuplicateCandidate[][] = [];
+    for (let offset = 0; offset < indexes.length; offset += 10) chunks.push(indexes.slice(offset, offset + 10).map((index) => ({ id: items[index].id, source: items[index].marker, title: items[index].title, summary: items[index].core, effect: items[index].impact })));
+    return chunks.filter((group) => group.length >= 2);
+  });
+}
+
+function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const removed = new Set<string>();
+  for (const decision of decisions) {
+    const members = [decision.keepId, ...decision.mergeIds].map((id) => byId.get(id)).filter((item): item is Item => !!item && !removed.has(item.id));
+    if (members.length < 2 || members.filter((item) => !item.marker.startsWith("BLOCK")).length > 1) continue;
+    const keep = members.find((item) => !item.marker.startsWith("BLOCK")) ?? byId.get(decision.keepId);
+    if (!keep) continue;
+    const originals = [...new Set(members.map((item) => item.original.trim()).filter(Boolean))];
+    const pages = [...new Set(members.map((item) => item.page).filter((page): page is number => page !== null))];
+    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), page: pages.length === 1 ? pages[0] : null });
+    members.filter((item) => item.id !== keep.id).forEach((item) => removed.add(item.id));
+  }
+  return items.filter((item) => !removed.has(item.id)).map((item) => byId.get(item.id) ?? item);
 }
 
 export default function Home() {
@@ -225,15 +270,23 @@ export default function Home() {
       let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
-        return { id: clause.id, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item;
+        return { id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item;
       });
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
-      const response = await fetch("/api/merge-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
-      const overview = await readApiJson<{ documentType: string; summary: string; duplicateGroups?: Array<{ indexes: number[] }> }>(response);
-      if (!response.ok) throw new Error(overview.error || "분석 결과를 정리하지 못했어요.");
-      items = mergeSimilarItems(items, overview.duplicateGroups ?? []);
+      const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";
+      const priorityCount = items.filter((item) => item.level === "danger" || item.level === "caution").length;
+      const summary = priorityCount ? `계약서에서 확인한 ${items.length}개 항목 중 먼저 확인할 위험·주의 내용은 ${priorityCount}개입니다.` : `계약서에서 확인한 ${items.length}개 항목을 위험도와 중요도에 따라 정리했습니다.`;
+      const candidateGroups = buildDuplicateCandidateGroups(items);
+      if (candidateGroups.length) {
+        setProgress({ phase: "비슷한 설명만 골라 중복 여부를 확인하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 97 });
+        try {
+          const response = await fetch("/api/deduplicate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidateGroups }) });
+          const result = await readApiJson<{ duplicateGroups?: DuplicateDecision[] }>(response);
+          if (response.ok) items = mergeSimilarItems(items, result.duplicateGroups ?? []);
+        } catch { /* 부가적인 중복 검사 실패 시 원본 분석 항목을 그대로 사용합니다. */ }
+      }
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
-      const data: Analysis = { documentType: overview.documentType, summary: overview.summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
+      const data: Analysis = { documentType, summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
       setAnalysis(data); setStatus("done");
       window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
