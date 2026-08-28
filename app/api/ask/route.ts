@@ -1,4 +1,5 @@
 import { CONTRACT_QA_PROMPT } from "../../ai-prompts";
+import { callGemini, geminiText, type GeminiPayload } from "../gemini";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -24,7 +25,7 @@ const answerSchema = {
 function jsonError(message: string, status: number) { return Response.json({ error: message }, { status }); }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return jsonError("AI 분석 서비스 설정이 아직 완료되지 않았습니다.", 503);
   const formData = await request.formData();
   const uploaded = formData.get("file");
@@ -40,28 +41,19 @@ export async function POST(request: Request) {
   const bytes = new Uint8Array(await uploaded.arrayBuffer());
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  const fileData = `data:application/pdf;base64,${btoa(binary)}`;
+  const fileData = btoa(binary);
   const conversation = history.map((entry) => `${entry.role === "user" ? "사용자" : "AI"}: ${entry.text}`).join("\n");
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "gpt-5.4-2026-03-05", store: false,
-      instructions: CONTRACT_QA_PROMPT,
-      input: [{ role: "user", content: [
-        { type: "input_text", text: `이전 대화:\n${conversation || "없음"}\n\n현재 질문: ${question}` },
-        { type: "input_file", filename: uploaded.name, file_data: fileData, detail: "auto" },
-      ] }],
-      text: { format: { type: "json_schema", name: "contract_question_answer", strict: true, schema: answerSchema } },
-    }),
-  });
+  const response = await callGemini(apiKey, CONTRACT_QA_PROMPT, [
+    { text: `이전 대화:\n${conversation || "없음"}\n\n현재 질문: ${question}` },
+    { inlineData: { mimeType: "application/pdf", data: fileData } },
+  ], answerSchema);
   if (!response.ok) {
-    const detail = await response.text(); console.error("OpenAI ask error", response.status, detail.slice(0, 500));
+    const detail = await response.text(); console.error("Gemini ask error", response.status, detail.slice(0, 500));
     if (response.status === 429) return jsonError("질문 요청이 많습니다. 잠시 후 다시 시도해 주세요.", 429);
     return jsonError("질문에 답하지 못했습니다. 잠시 후 다시 시도해 주세요.", 502);
   }
-  const payload = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
-  const outputText = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((content) => content.type === "output_text")?.text;
+  const payload = await response.json() as GeminiPayload;
+  const outputText = geminiText(payload);
   if (!outputText) return jsonError("답변 결과를 읽지 못했습니다.", 502);
   try { return Response.json(JSON.parse(outputText)); } catch { return jsonError("답변 결과 형식이 올바르지 않습니다.", 502); }
 }
