@@ -18,7 +18,32 @@ const financeQuizzes = [
   { question: "연체이자는 무엇일까요?", choices: ["돈을 늦게 갚을 때 추가로 붙는 이자", "예금에 붙는 이자", "대출 신청 수수료"], answer: 0, explanation: "정해진 날까지 돈을 내지 못하면 원래 이자 외에 추가 부담이 생길 수 있어요." },
   { question: "고정금리의 뜻으로 맞는 것은?", choices: ["계약에서 정한 기간 동안 금리가 고정돼요", "매달 금리가 무조건 내려가요", "원금을 갚지 않아도 돼요"], answer: 0, explanation: "고정금리는 약속한 기간 동안 적용 금리가 바뀌지 않아 이자 부담을 예상하기 쉬워요." },
   { question: "자동 연장을 막고 싶다면 가장 먼저 볼 것은?", choices: ["계약서의 연장 거절 통지 기한", "금융회사 광고", "계약서의 글자 크기"], answer: 0, explanation: "자동 연장 조항에는 언제까지 거절 의사를 알려야 하는지가 적혀 있으므로 그 기한이 중요해요." },
+  { question: "대출의 원금은 무엇일까요?", choices: ["처음 빌린 돈 자체", "연체할 때 붙는 비용", "매년 내는 카드 연회비"], answer: 0, explanation: "원금은 이자나 수수료를 제외하고 금융회사에서 실제로 빌린 돈이에요." },
+  { question: "거치기간에는 보통 무엇을 확인해야 할까요?", choices: ["원금을 갚지 않고 이자만 내는 기간인지", "신용카드를 못 쓰는 기간인지", "계약서를 보관하는 기간인지"], answer: 0, explanation: "거치기간에는 원금 상환을 미루고 이자만 내는 경우가 많아요. 종료 뒤 상환액이 커질 수 있어 조건을 확인해야 해요." },
+  { question: "만기일시상환 방식은 무엇일까요?", choices: ["원금을 매달 똑같이 나눠 갚는 방식", "만기까지 이자를 내다가 원금을 마지막에 한꺼번에 갚는 방식", "이자를 전혀 내지 않는 방식"], answer: 1, explanation: "만기일시상환은 대출 기간 중 주로 이자를 내고, 만기일에 원금을 한꺼번에 갚는 방식이에요." },
+  { question: "우대금리는 어떤 의미일까요?", choices: ["조건을 충족하면 금리를 낮춰주는 혜택", "연체하면 추가되는 금리", "모든 고객에게 똑같이 적용되는 세금"], answer: 0, explanation: "급여 이체나 카드 사용 같은 조건을 충족하면 대출금리를 낮춰주는 혜택이에요. 유지 조건도 함께 확인해야 해요." },
+  { question: "가산금리는 무엇일까요?", choices: ["기준금리에 금융회사가 위험·비용 등을 반영해 더하는 금리", "예금자에게 주는 선물", "대출 원금을 깎아주는 비율"], answer: 0, explanation: "대출금리는 보통 기준금리에 가산금리를 더하고 우대금리를 빼는 식으로 정해져요." },
+  { question: "기한이익 상실의 의미로 알맞은 것은?", choices: ["상환기한이 자동으로 늘어나는 것", "남은 돈을 약속한 만기보다 일찍 한꺼번에 갚으라는 요구를 받을 수 있는 것", "이자가 모두 면제되는 것"], answer: 1, explanation: "연체 등 계약에서 정한 사유가 생기면 원래 만기까지 기다리지 않고 남은 채무 전액을 요구받을 수 있다는 뜻이에요." },
+  { question: "담보는 왜 제공할까요?", choices: ["빚을 갚지 못할 때 채권 회수에 쓰기 위해", "대출 계약을 자동 취소하기 위해", "이자를 무조건 없애기 위해"], answer: 0, explanation: "담보는 돈을 갚지 못하는 상황에 대비해 채권자가 처분하거나 권리를 행사할 수 있게 제공하는 재산이에요." },
+  { question: "근저당권을 볼 때 특히 확인할 것은?", choices: ["담보 범위와 채권최고액", "계약서 종이 색상", "은행 영업점의 크기"], answer: 0, explanation: "근저당권은 어떤 채무를 어디까지 담보하는지, 채권최고액이 얼마인지 확인하는 것이 중요해요." },
+  { question: "채권최고액은 무엇을 뜻할까요?", choices: ["실제로 빌린 원금과 언제나 같은 금액", "근저당권으로 담보되는 채권의 최대 한도", "매달 갚아야 하는 최소 금액"], answer: 1, explanation: "채권최고액은 담보로 보장하는 최대 범위예요. 실제 대출 원금보다 크게 정해질 수도 있어요." },
+  { question: "보증인이 있는 계약에서 꼭 확인할 것은?", choices: ["보증 책임의 범위와 한도", "보증인의 직업만", "계약서의 페이지 수"], answer: 0, explanation: "보증인은 채무자가 갚지 못할 때 대신 책임질 수 있으므로 어떤 채무를 얼마까지 책임지는지 확인해야 해요." },
+  { question: "보험의 면책사항은 무엇일까요?", choices: ["보험회사가 보험금을 지급하지 않을 수 있는 경우", "보험료를 할인해 주는 조건", "보험 계약자의 주소"], answer: 0, explanation: "면책사항은 사고가 나도 계약에서 정한 이유로 보험금이 지급되지 않을 수 있는 경우를 말해요." },
+  { question: "갱신형 보험의 특징은 무엇일까요?", choices: ["갱신할 때 보험료나 조건이 달라질 수 있어요", "한 번 가입하면 보험료가 절대 바뀌지 않아요", "보험료를 한 번만 내면 돼요"], answer: 0, explanation: "갱신형 보험은 정해진 주기마다 계약이 갱신되며 나이와 위험률 등에 따라 보험료가 달라질 수 있어요." },
+  { question: "자기부담금은 무엇일까요?", choices: ["손해 중 가입자가 직접 부담하는 금액", "보험회사가 대신 내는 세금", "가입하면 돌려받는 축하금"], answer: 0, explanation: "보험금을 청구해도 손해액 전부가 아니라 계약에서 정한 일부는 가입자가 직접 부담할 수 있어요." },
+  { question: "보험료를 오래 내지 않으면 생길 수 있는 일은?", choices: ["계약 효력이 정지되거나 해지될 수 있어요", "보장금액이 자동으로 늘어요", "모든 보험료가 환급돼요"], answer: 0, explanation: "납입 유예기간이 지난 뒤에도 보험료를 내지 않으면 계약이 실효되거나 해지될 수 있어요. 정확한 조건은 약관을 확인해야 해요." },
+  { question: "청약철회 기간을 확인해야 하는 이유는?", choices: ["정해진 기간 안에 계약을 철회할 권리가 있을 수 있어서", "대출금리가 자동으로 오르기 때문에", "계약번호가 바뀌기 때문에"], answer: 0, explanation: "청약철회는 정해진 기간과 조건을 지켜야 하므로 계약서에 적힌 가능 기간과 방법을 확인해야 해요." },
+  { question: "카드 리볼빙을 이용하면 어떻게 될까요?", choices: ["이번 달 결제액 일부를 다음 달로 넘기고 수수료가 붙을 수 있어요", "카드 대금이 모두 면제돼요", "예금 이자가 늘어요"], answer: 0, explanation: "리볼빙은 일부 결제금액을 다음 달로 미루는 서비스예요. 남은 금액에 수수료가 붙고 빚이 계속 쌓일 수 있어요." },
+  { question: "할부수수료를 비교할 때 무엇을 봐야 할까요?", choices: ["할부 기간과 적용 수수료율", "카드 디자인", "영수증 글꼴"], answer: 0, explanation: "할부 기간이 길어질수록 전체 수수료 부담이 커질 수 있으므로 기간과 수수료율을 함께 확인해야 해요." },
+  { question: "현금서비스의 성격으로 알맞은 것은?", choices: ["신용카드로 받는 단기 대출", "내 예금을 찾는 것", "무료 포인트를 받는 것"], answer: 0, explanation: "현금서비스는 카드사에서 단기간 돈을 빌리는 금융서비스라서 이자율과 신용 영향 여부를 확인해야 해요." },
+  { question: "자동이체가 실패했을 때 가장 먼저 할 일은?", choices: ["납부 여부와 계좌 잔액을 확인하고 필요한 금액을 납부하기", "다음 달까지 아무것도 하지 않기", "계약서를 버리기"], answer: 0, explanation: "잔액 부족 등으로 자동이체가 실패하면 연체로 이어질 수 있으므로 납부 상태와 재출금 일정을 바로 확인하는 것이 좋아요." },
+  { question: "신용점수에 영향을 줄 수 있는 행동은?", choices: ["대출금을 장기간 연체하는 것", "계약서를 읽는 것", "통장 비밀번호를 바꾸는 것"], answer: 0, explanation: "장기 연체 등은 신용정보에 반영될 수 있어 이후 대출이나 카드 이용에 영향을 줄 수 있어요." },
+  { question: "중도해지 전에 확인할 내용으로 가장 알맞은 것은?", choices: ["해지 비용, 환급금, 제한 조건", "회사 로고 색상", "상담원의 이름만"], answer: 0, explanation: "계약을 중간에 끝내면 수수료가 생기거나 돌려받는 금액이 적을 수 있으므로 관련 조건을 먼저 확인해야 해요." },
+  { question: "변제충당순서는 무엇을 정한 내용일까요?", choices: ["낸 돈을 비용·이자·원금 등에 어떤 순서로 처리할지", "대출 신청자를 부르는 순서", "보험 가입 순서"], answer: 0, explanation: "상환한 돈이 비용, 이자, 원금 중 어디부터 갚은 것으로 처리되는지를 정한 순서예요." },
+  { question: "개인정보 제3자 제공 동의에서 확인할 것은?", choices: ["누구에게 어떤 정보를 왜, 얼마나 오래 제공하는지", "문서의 여백 크기", "금융회사 건물 주소만"], answer: 0, explanation: "제공받는 곳, 제공 목적, 정보 항목, 보유 기간을 확인해야 내 정보가 어떻게 쓰이는지 알 수 있어요." },
+  { question: "대출 상환일을 놓치지 않으려면 가장 유용한 정보는?", choices: ["정확한 납부일과 자동이체 계좌", "계약서 표지 사진", "은행 광고 문구"], answer: 0, explanation: "납부일과 출금 계좌를 확인하고 미리 잔액을 준비하면 의도하지 않은 연체를 줄일 수 있어요." },
 ];
+const QUIZ_SET_SIZE = 10;
 const CLAUSES_PER_BATCH = 8;
 const BATCH_CONCURRENCY = 1;
 type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
@@ -132,15 +157,46 @@ function ExplanationSections({ item, glossary }: { item: Item; glossary: Glossar
 }
 
 function WaitingQuiz() {
+  const [quizSet, setQuizSet] = useState(0);
   const [quizIndex, setQuizIndex] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
-  const quiz = financeQuizzes[quizIndex];
-  const next = () => { setQuizIndex((current) => (current + 1) % financeQuizzes.length); setSelected(null); };
+  const [correctCount, setCorrectCount] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const setCount = Math.ceil(financeQuizzes.length / QUIZ_SET_SIZE);
+  const quiz = financeQuizzes[(quizSet * QUIZ_SET_SIZE + quizIndex) % financeQuizzes.length];
+  const resultComment = correctCount === QUIZ_SET_SIZE
+    ? "완벽해요! 계약서 핵심 용어를 아주 탄탄하게 알고 있어요."
+    : correctCount >= 8
+      ? "훌륭해요! 중요한 금융 개념을 대부분 정확히 이해하고 있어요."
+      : correctCount >= 6
+        ? "좋아요! 헷갈린 내용만 한 번 더 보면 훨씬 든든해질 거예요."
+        : "괜찮아요. 지금 확인한 개념부터 하나씩 익혀가면 됩니다.";
+  const choose = (index: number) => {
+    if (selected !== null) return;
+    setSelected(index);
+    if (index === quiz.answer) setCorrectCount((count) => count + 1);
+  };
+  const next = () => {
+    if (quizIndex === QUIZ_SET_SIZE - 1) setFinished(true);
+    else setQuizIndex((current) => current + 1);
+    setSelected(null);
+  };
+  const restart = () => {
+    setQuizSet((current) => (current + 1) % setCount);
+    setQuizIndex(0); setSelected(null); setCorrectCount(0); setFinished(false);
+  };
   return <section className="waitingQuiz" aria-label="기다리는 동안 푸는 금융 상식 퀴즈">
-    <div className="quizHead"><span>기다리는 동안</span><b>금융 상식 한 문제</b><small>{quizIndex + 1} / {financeQuizzes.length}</small></div>
-    <p>{quiz.question}</p>
-    <div className="quizChoices">{quiz.choices.map((choice, index) => <button type="button" key={choice} disabled={selected !== null} className={selected === null ? "" : index === quiz.answer ? "correct" : selected === index ? "wrong" : ""} onClick={(event) => { event.stopPropagation(); setSelected(index); }}>{choice}</button>)}</div>
-    {selected !== null && <div className={`quizResult ${selected === quiz.answer ? "correct" : "wrong"}`}><b>{selected === quiz.answer ? "정답이에요!" : "아쉬워요. 정답을 확인해 보세요."}</b><span>{quiz.explanation}</span><button type="button" onClick={(event) => { event.stopPropagation(); next(); }}>다음 문제 →</button></div>}
+    <div className="quizHead"><span>기다리는 동안</span><b>금융 상식 퀴즈</b><small>{finished ? "10 / 10" : `${quizIndex + 1} / ${QUIZ_SET_SIZE}`}</small></div>
+    {finished ? <div className="quizScore">
+      <span>10문제 완료</span><strong>{correctCount * 10}점</strong>
+      <div><b>✓ 맞음 {correctCount}개</b><b>× 틀림 {QUIZ_SET_SIZE - correctCount}개</b></div>
+      <p>{resultComment}</p>
+      <button type="button" onClick={(event) => { event.stopPropagation(); restart(); }}>새로운 10문제 풀기 →</button>
+    </div> : <>
+      <p>{quiz.question}</p>
+      <div className="quizChoices">{quiz.choices.map((choice, index) => <button type="button" key={choice} disabled={selected !== null} className={selected === null ? "" : index === quiz.answer ? "correct" : selected === index ? "wrong" : ""} onClick={(event) => { event.stopPropagation(); choose(index); }}>{choice}</button>)}</div>
+      {selected !== null && <div className={`quizResult ${selected === quiz.answer ? "correct" : "wrong"}`}><b>{selected === quiz.answer ? "정답이에요!" : "아쉬워요. 정답을 확인해 보세요."}</b><span>{quiz.explanation}</span><button type="button" onClick={(event) => { event.stopPropagation(); next(); }}>{quizIndex === QUIZ_SET_SIZE - 1 ? "결과 보기 →" : "다음 문제 →"}</button></div>}
+    </>}
   </section>;
 }
 
