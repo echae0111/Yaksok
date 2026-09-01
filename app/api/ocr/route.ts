@@ -1,6 +1,6 @@
 import { callGemini, geminiText, type GeminiPayload } from "../gemini";
 
-const MAX_IMAGE_LENGTH = 1_800_000;
+const MAX_IMAGE_LENGTH = 700_000;
 const ocrSchema = {
   type: "object", additionalProperties: false, required: ["text"],
   properties: { text: { type: "string" } },

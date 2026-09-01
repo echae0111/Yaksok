@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-9_prompt-17_relevance-1_ocr-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-9_prompt-17_relevance-1_ocr-2_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -164,14 +164,14 @@ async function readScannedPdf(pdf: pdfjs.PDFDocumentProxy, onProgress?: (current
   const pages: Line[][] = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.7 });
+    const viewport = page.getViewport({ scale: 1.35 });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("스캔 페이지 이미지를 만들지 못했습니다.");
     context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvas, canvasContext: context, viewport }).promise;
-    const image = canvas.toDataURL("image/jpeg", .82).replace(/^data:image\/jpeg;base64,/, "");
+    const image = canvas.toDataURL("image/jpeg", .7).replace(/^data:image\/jpeg;base64,/, "");
     const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: pageNumber, image }) });
     const result = await response.json() as { page?: number; text?: string; error?: string };
     if (!response.ok || !result.text) throw new Error(result.error || `${pageNumber}쪽의 글자를 읽지 못했습니다.`);
