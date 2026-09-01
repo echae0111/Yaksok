@@ -4,7 +4,7 @@ import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
+type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[] };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
 type ClauseExplanation = { clauseId: string; relevant: boolean; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
@@ -284,11 +284,26 @@ function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
     const keep = members.find((item) => !item.marker.startsWith("BLOCK")) ?? byId.get(decision.keepId);
     if (!keep) continue;
     const originals = [...new Set(members.map((item) => item.original.trim()).filter(Boolean))];
+    const sourceBlockIds = [...new Set(members.flatMap((item) => item.sourceBlockIds))];
     const pages = [...new Set(members.map((item) => item.page).filter((page): page is number => page !== null))];
-    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), page: pages.length === 1 ? pages[0] : null });
+    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), sourceBlockIds, page: pages.length === 1 ? pages[0] : null });
     members.filter((item) => item.id !== keep.id).forEach((item) => removed.add(item.id));
   }
   return items.filter((item) => !removed.has(item.id)).map((item) => byId.get(item.id) ?? item);
+}
+
+function hasUnsupportedInference(explanation: ClauseExplanation, original: string) {
+  const generated = `${explanation.title} ${explanation.core} ${explanation.easyExplanation} ${explanation.impact} ${explanation.checkPoint} ${explanation.action}`;
+  const checks: Array<[RegExp, RegExp]> = [
+    [/손해배상|배상\s*책임/, /손해배상|손해를.{0,8}배상/],
+    [/즉시.{0,10}(상환|갚|변제)/, /즉시|곧.{0,8}(상환|변제)/],
+    [/추가\s*담보/, /추가\s*담보|담보.{0,8}(추가|보충)/],
+    [/계약\s*위반/, /계약\s*위반|위반한\s*경우/],
+    [/신용.{0,6}불이익/, /신용정보|신용도|신용점수|신용.{0,6}불이익/],
+    [/대출.{0,6}(회수|회수당)/, /대출.{0,6}회수|채권.{0,6}회수/],
+    [/권리.{0,6}(상실|잃)/, /권리.{0,6}(상실|잃)/],
+  ];
+  return checks.some(([claim, support]) => claim.test(generated) && !support.test(original));
 }
 
 export default function Home() {
@@ -354,8 +369,8 @@ export default function Home() {
       let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
-        if (!explanation.relevant) return [];
-        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item];
+        if (!explanation.relevant || hasUnsupportedInference(explanation, clause.original)) return [];
+        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds } satisfies Item];
       });
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";

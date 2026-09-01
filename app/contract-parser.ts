@@ -1,10 +1,11 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-10_structure-1_prompt-18_relevance-1_ocr-2_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-11_source-ids-1_effects-1_prompt-18_ocr-2_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
-export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
+export type EffectCode = "CONTRACT_TERMINATION" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "CONTRACT_CONTINUATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_PROCEDURE" | "GENERAL_TERM";
+export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; text: string; original: string; sourceBlockIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
 export type BasicInfo = { label: string; value: string; explanation: string; page: number };
 export type DocumentNotice = { text: string; page: number };
 type Line = { page: number; y: number; height: number; text: string };
@@ -113,7 +114,46 @@ async function sha256(value: ArrayBuffer | string) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function classify(text: string): { signals: RiskSignals; level: RawClause["level"] } {
+const riskEffects = new Set<EffectCode>(["CONTRACT_TERMINATION", "ACCELERATION", "IMMEDIATE_REPAYMENT", "LOAN_SUSPENSION", "LOAN_RESTRICTION", "DEFAULT_INTEREST", "DIRECT_FINANCIAL_LOSS", "DAMAGE_LIABILITY"]);
+const cautionEffects = new Set<EffectCode>(["CANCELLATION_RESTRICTION", "MODIFICATION_RESTRICTION", "DEADLINE_TO_NOTIFY", "RIGHT_TO_CLAIM_RESTRICTED", "CONSENT_REQUIRED", "CORRECTION_RESTRICTION", "OPERATION_SUSPENSION", "CONTRACT_CONTINUATION"]);
+const importantEffects = new Set<EffectCode>(["PAYMENT_OBLIGATION", "NOTICE_OBLIGATION", "ASSIGNMENT_PROCEDURE", "REPRESENTATION", "CORE_PROCEDURE"]);
+
+function extractEffects(text: string): EffectCode[] {
+  const effects = new Set<EffectCode>();
+  const add = (effect: EffectCode, pattern: RegExp) => { if (pattern.test(text)) effects.add(effect); };
+  add("CONTRACT_TERMINATION", /계약.{0,14}(해지|해제|종료)/s);
+  add("ACCELERATION", /기한이익.{0,12}상실|기한전.{0,10}(채무변제|상환)/s);
+  add("IMMEDIATE_REPAYMENT", /즉시.{0,12}(전액|모두|금액|채무).{0,12}(상환|변제|지급)|곧.{0,8}(상환|변제)/s);
+  add("LOAN_SUSPENSION", /대출.{0,12}(중단|정지)/s);
+  add("LOAN_RESTRICTION", /대출.{0,12}(제한|거절)/s);
+  add("DEFAULT_INTEREST", /연체이자|지연배상금|지체.{0,8}(이자|배상)/s);
+  add("DAMAGE_LIABILITY", /손해배상.{0,8}(책임|의무|하여야|한다)|손해를.{0,8}배상/s);
+  add("DIRECT_FINANCIAL_LOSS", /위약금|몰취|환급하지\s*않|반환하지\s*않/s);
+  add("CANCELLATION_RESTRICTION", /취소할\s*수\s*없|취소.{0,10}(제한|불가)/s);
+  add("MODIFICATION_RESTRICTION", /변경할\s*수\s*없|변경.{0,10}(제한|불가)/s);
+  add("RIGHT_TO_CLAIM_RESTRICTED", /책임을\s*물을\s*수\s*없|대항할\s*수\s*없|주장할\s*수\s*없|이의를.{0,8}(제기할\s*수\s*없|주장할\s*수\s*없)/s);
+  add("CONSENT_REQUIRED", /동의를.{0,8}(받아야|얻어야|받아야\s*한다)|동의가.{0,8}필요/s);
+  add("CORRECTION_RESTRICTION", /정정할\s*수\s*없|정정.{0,8}(제한|불가)/s);
+  add("OPERATION_SUSPENSION", /업무.{0,10}(중단|정지)|거래.{0,10}(중단|정지)/s);
+  add("CONTRACT_CONTINUATION", /자동.{0,4}(연장|갱신)|\d+년씩.{0,6}연장/s);
+  add("DEADLINE_TO_NOTIFY", /(당일|\d+일\s*(?:전|이내)|까지|기간\s*내).{0,24}(통지|알려|이의|신고|제출|의사표시)|(?:통지|알려|이의|신고|제출|의사표시).{0,24}(당일|\d+일\s*(?:전|이내)|까지|기간\s*내)/s);
+  add("PAYMENT_OBLIGATION", /(지급|납입|상환|변제).{0,12}(하여야\s*한다|해야\s*한다|하기로\s*한다|의무)/s);
+  add("NOTICE_OBLIGATION", /(통지|통보|신고|알려야|제출).{0,12}(하여야\s*한다|해야\s*한다|하기로\s*한다|의무)/s);
+  add("ASSIGNMENT_PROCEDURE", /채권양도|양도승낙|양도.{0,8}(통지|통보)/s);
+  add("REPRESENTATION", /(확인|보증).{0,10}(한다|하기로\s*한다)/s);
+  add("CORE_PROCEDURE", /(절차|방법|방식|계좌).{0,16}(따라|의하여|한다|하여야)/s);
+  if (!effects.size) effects.add("GENERAL_TERM");
+  return [...effects];
+}
+
+function levelFromEffects(effects: EffectCode[]): RawClause["level"] {
+  if (effects.some((effect) => riskEffects.has(effect))) return "danger";
+  if (effects.some((effect) => cautionEffects.has(effect))) return "caution";
+  if (effects.some((effect) => importantEffects.has(effect))) return "important";
+  return "general";
+}
+
+function classify(text: string): { signals: RiskSignals; effects: EffectCode[]; level: RawClause["level"] } {
   const signals: RiskSignals = {
     immediateRepayment: /(기한이익.{0,12}상실|즉시.{0,12}(전액|모두).{0,12}(상환|변제)|남은.{0,16}(전액|모두).{0,12}(갚|상환))/s.test(text),
     terminationOrExclusion: /(계약.{0,14}(해지|해제|종료)|대출.{0,12}(중단|제한|거절)|보장하지 아니|보장하지 않|면책|지급하지 아니|지급하지 않)/s.test(text),
@@ -123,11 +163,8 @@ function classify(text: string): { signals: RiskSignals; level: RawClause["level
     deadline: /(당일|까지.{0,12}(신청|통지|제출|납입|지급|확인)|기한|기간.{0,8}내|\d+일\s*이내)/s.test(text),
     consumerDuty: /(하여야 한다|해야 한다|의무|반드시|지체 없이|통지하여야|제출하여야)/s.test(text),
   };
-  const severeFinancialEffect = /(연체이자|지연배상금|손해배상|즉시.{0,12}(지급|상환|변제)|지급.{0,8}의무.{0,8}(확정|확대))/s.test(text);
-  const rightsLost = /(권리.{0,8}상실|권리를\s*잃|책임을\s*물을\s*수\s*없)/s.test(text);
-  const weights = [signals.immediateRepayment ? 5 : 0, signals.terminationOrExclusion ? 5 : 0, severeFinancialEffect ? 5 : 0, rightsLost ? 5 : 0, signals.rightRestriction ? 4 : 0, signals.additionalCost ? 4 : 0, signals.creditImpact ? 4 : 0, signals.deadline ? 3 : 0, signals.consumerDuty ? 2 : 0];
-  const score = Math.max(...weights);
-  return { signals, level: score >= 5 ? "danger" : score >= 3 ? "caution" : score >= 1 ? "important" : "general" };
+  const effects = extractEffects(text);
+  return { signals, effects, level: levelFromEffects(effects) };
 }
 
 function groupLines(items: Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, page: number) {
@@ -176,7 +213,8 @@ function isIncompleteText(text: string) {
   if (!value) return true;
   if (hasUnclosedDelimiter(value)) return true;
   if (/[·,:;\-–—(（[〔]$/.test(value)) return true;
-  if (/(?:및|또는|하거나|하는|하여|하고|하되|때|경우에는|경우|경우로서|위하여|따라|의하여|다음과\s*같다|다음\s*(?:각\s*)?호(?:의\s*경우)?)[.!?。]?$/.test(value)) return true;
+  if (/(?:경우|경우에는)[.!?。]?$/.test(value) && /(할\s*수\s*(?:있|없)|하여야\s*한다|해야\s*한다|하기로\s*한다|종료|제한|중단|해지|지급|상환|통지|책임을\s*물을\s*수\s*없)/.test(value)) return false;
+  if (/(?:및|또는|거나|그리고|하거나|하는|하여|하며|하고|하되|한|때|경우에는\s*다음|부터|까지의|경우로서|위하여|따라|의하여|다음과\s*같다|다음\s*(?:각\s*)?호(?:의\s*경우)?)[.!?。]?$/.test(value)) return true;
   return value.length < 70 && !predicatePattern.test(value) && !/[.!?。]$/.test(value);
 }
 
@@ -226,9 +264,10 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   for (const lines of pages) for (const line of [...lines.slice(0, 2), ...lines.slice(-2)]) edgeCounts.set(compact(line.text), (edgeCounts.get(compact(line.text)) ?? 0) + 1);
   const repeated = new Set([...edgeCounts].filter(([key, count]) => key.length > 2 && count >= Math.max(3, Math.ceil(pdf.numPages * .45))).map(([key]) => key));
   const separated = extractNonClauses(pages);
-  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`))));
+  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`)))).map((block, index) => ({ ...block, id: `P${String(block.page).padStart(3, "0")}_B${String(index + 1).padStart(4, "0")}` }));
+  const sourceBlockMap = new Map(blocks.map((block) => [block.id, normalize(block.lines.join(" "))]));
 
-  const merged: Array<{ page: number; endPage: number; text: string; marked: boolean; heading: boolean }> = [];
+  const merged: Array<{ page: number; endPage: number; text: string; sourceBlockIds: string[]; marked: boolean; heading: boolean }> = [];
   let activeListParent = -1;
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
@@ -239,7 +278,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     if (activeListParent >= 0) {
       const parent = merged[activeListParent];
       if (!beginsArticle && (beginsChild || !block.heading)) {
-        parent.text = normalize(`${parent.text} ${text}`); parent.endPage = block.page;
+        parent.text = normalize(`${parent.text} ${text}`); parent.endPage = block.page; parent.sourceBlockIds.push(block.id);
         continue;
       }
       activeListParent = -1;
@@ -247,12 +286,12 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const previous = merged[merged.length - 1];
     const previousIsIncomplete = !!previous && isIncompleteText(previous.text);
     const crossesAdjacentPage = !!previous && block.page === previous.endPage + 1;
-    const sameClause = !!previous && !block.marked && !block.heading && ((previous.endPage === block.page && (previous.marked || previous.heading || previousIsIncomplete)) || (crossesAdjacentPage && previousIsIncomplete));
+    const sameClause = !!previous && !beginsArticle && ((previousIsIncomplete && !block.heading) || (!block.marked && !block.heading && previous.endPage === block.page && (previous.marked || previous.heading)) || (crossesAdjacentPage && previousIsIncomplete));
     if (sameClause) {
-      previous.text = normalize(`${previous.text} ${text}`); previous.endPage = block.page;
+      previous.text = normalize(`${previous.text} ${text}`); previous.endPage = block.page; previous.sourceBlockIds.push(block.id);
       if (listPreamblePattern.test(previous.text)) activeListParent = merged.length - 1;
     } else {
-      merged.push({ page: block.page, endPage: block.page, text, marked: block.marked, heading: block.heading });
+      merged.push({ page: block.page, endPage: block.page, text, sourceBlockIds: [block.id], marked: block.marked, heading: block.heading });
       if (listPreamblePattern.test(text)) activeListParent = merged.length - 1;
     }
   }
@@ -268,7 +307,9 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const marker = block.text.match(markerPattern)?.[1]?.replace(/\s+/g, "") ?? `BLOCK${index + 1}`;
     const id = `${documentHash.slice(0, 8).toUpperCase()}_P${String(block.page).padStart(3, "0")}_${marker.replace(/[^0-9A-Za-z가-힣①-⑳]/g, "")}_${textHash.slice(0, 8).toUpperCase()}`;
     const risk = classify(block.text);
-    clauses.push({ id, page: block.page, order: clauses.length, marker, text: block.text, original: block.text.slice(0, 700), ...risk });
+    const sourceText = block.sourceBlockIds.map((blockId) => sourceBlockMap.get(blockId)).filter((value): value is string => !!value).join(" ");
+    if (!sourceText || isIncompleteText(sourceText)) continue;
+    clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, text: sourceText, original: sourceText.slice(0, 1200), sourceBlockIds: block.sourceBlockIds, ...risk });
   }
   if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
   return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };
