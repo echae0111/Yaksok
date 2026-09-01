@@ -4,7 +4,7 @@ import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[] };
+type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: RawClause["effects"] };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
 type ClauseExplanation = { clauseId: string; relevant: boolean; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
@@ -281,15 +281,32 @@ function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
   for (const decision of decisions) {
     const members = [decision.keepId, ...decision.mergeIds].map((id) => byId.get(id)).filter((item): item is Item => !!item && !removed.has(item.id));
     if (members.length < 2 || members.filter((item) => !item.marker.startsWith("BLOCK")).length > 1) continue;
+    const effectKeys = members.map((item) => [...item.effects].sort().join("|"));
+    if (new Set(effectKeys).size !== 1) continue;
+    const normalizedSources = members.map((item) => similarityText(item.original));
+    const longestSource = normalizedSources.reduce((longest, value) => value.length > longest.length ? value : longest, "");
+    if (normalizedSources.some((value) => !longestSource.includes(value))) continue;
     const keep = members.find((item) => !item.marker.startsWith("BLOCK")) ?? byId.get(decision.keepId);
     if (!keep) continue;
     const originals = [...new Set(members.map((item) => item.original.trim()).filter(Boolean))];
     const sourceBlockIds = [...new Set(members.flatMap((item) => item.sourceBlockIds))];
+    const sourceClauseIds = [...new Set(members.flatMap((item) => item.sourceClauseIds))];
+    const effects = [...new Set(members.flatMap((item) => item.effects))];
     const pages = [...new Set(members.map((item) => item.page).filter((page): page is number => page !== null))];
-    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), sourceBlockIds, page: pages.length === 1 ? pages[0] : null });
+    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), sourceBlockIds, sourceClauseIds, effects, page: pages.length === 1 ? pages[0] : null });
     members.filter((item) => item.id !== keep.id).forEach((item) => removed.add(item.id));
   }
   return items.filter((item) => !removed.has(item.id)).map((item) => byId.get(item.id) ?? item);
+}
+
+function isProgrammaticallyRelevant(clause: RawClause) {
+  if (clause.effects.some((effect) => effect !== "GENERAL_TERM")) return true;
+  return /(제\s*\d+\s*조|목적|정의|비밀유지|관할법원|계약.{0,8}(?:기간|효력)|하여야\s*한다|하기로\s*한다|할\s*수\s*(?:있|없)|의무|책임)/s.test(clause.original);
+}
+
+function auditCoverage(clauses: RawClause[], items: Item[]) {
+  const covered = new Set(items.flatMap((item) => item.sourceClauseIds));
+  return clauses.filter(isProgrammaticallyRelevant).filter((clause) => clause.sourceClauseIds.some((id) => !covered.has(id)));
 }
 
 function hasUnsupportedInference(explanation: ClauseExplanation, original: string) {
@@ -369,8 +386,12 @@ export default function Home() {
       let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
-        if (!explanation.relevant || hasUnsupportedInference(explanation, clause.original)) return [];
-        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds } satisfies Item];
+        if (!explanation.relevant) {
+          if (isProgrammaticallyRelevant(clause)) throw new Error(`${clause.marker} 조항의 독립적인 의미가 설명에서 누락됐어요. 다시 분석해 주세요.`);
+          return [];
+        }
+        if (hasUnsupportedInference(explanation, clause.original)) return [];
+        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
       });
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";
@@ -385,6 +406,8 @@ export default function Home() {
           if (response.ok) items = mergeSimilarItems(items, result.duplicateGroups ?? []);
         } catch { /* 부가적인 중복 검사 실패 시 원본 분석 항목을 그대로 사용합니다. */ }
       }
+      const uncovered = auditCoverage(parsed.clauses, items);
+      if (uncovered.length) throw new Error(`계약서의 일부 의미가 분석 카드에서 누락됐어요 (${uncovered.slice(0, 3).map((clause) => clause.marker).join(", ")}). 다시 분석해 주세요.`);
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType, summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);

@@ -1,11 +1,11 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-11_source-ids-1_effects-1_prompt-18_ocr-2_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-12_semantic-coverage-1_source-lineage-2_effects-2_prompt-19_ocr-2_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
-export type EffectCode = "CONTRACT_TERMINATION" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "CONTRACT_CONTINUATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_PROCEDURE" | "GENERAL_TERM";
-export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; text: string; original: string; sourceBlockIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
+export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
+export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; text: string; original: string; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
 export type BasicInfo = { label: string; value: string; explanation: string; page: number };
 export type DocumentNotice = { text: string; page: number };
 type Line = { page: number; y: number; height: number; text: string };
@@ -114,34 +114,46 @@ async function sha256(value: ArrayBuffer | string) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-const riskEffects = new Set<EffectCode>(["CONTRACT_TERMINATION", "ACCELERATION", "IMMEDIATE_REPAYMENT", "LOAN_SUSPENSION", "LOAN_RESTRICTION", "DEFAULT_INTEREST", "DIRECT_FINANCIAL_LOSS", "DAMAGE_LIABILITY"]);
-const cautionEffects = new Set<EffectCode>(["CANCELLATION_RESTRICTION", "MODIFICATION_RESTRICTION", "DEADLINE_TO_NOTIFY", "RIGHT_TO_CLAIM_RESTRICTED", "CONSENT_REQUIRED", "CORRECTION_RESTRICTION", "OPERATION_SUSPENSION", "CONTRACT_CONTINUATION"]);
-const importantEffects = new Set<EffectCode>(["PAYMENT_OBLIGATION", "NOTICE_OBLIGATION", "ASSIGNMENT_PROCEDURE", "REPRESENTATION", "CORE_PROCEDURE"]);
+const riskEffects = new Set<EffectCode>(["CONTRACT_TERMINATION", "ACCELERATION", "IMMEDIATE_REPAYMENT", "LOAN_SUSPENSION", "LOAN_RESTRICTION", "DEFAULT_INTEREST", "DIRECT_FINANCIAL_LOSS", "DIRECT_DAMAGE_LIABILITY"]);
+const cautionEffects = new Set<EffectCode>(["CANCELLATION_RESTRICTION", "CANCELLATION_DEADLINE", "MODIFICATION_RESTRICTION", "DEADLINE_TO_NOTIFY", "RIGHT_TO_CLAIM_RESTRICTED", "CONSENT_REQUIRED", "CORRECTION_RESTRICTION", "OPERATION_SUSPENSION", "OBLIGATION_SURVIVES_TERMINATION", "PAYMENT_OBLIGATION_CONTINUES", "CONTRACT_CONTINUATION"]);
+const importantEffects = new Set<EffectCode>(["PAYMENT_OBLIGATION", "NOTICE_OBLIGATION", "ASSIGNMENT_PROCEDURE", "REPRESENTATION", "CORE_OPERATIONAL_PROCEDURE", "PAYMENT_ALLOCATION"]);
 
 function extractEffects(text: string): EffectCode[] {
   const effects = new Set<EffectCode>();
   const add = (effect: EffectCode, pattern: RegExp) => { if (pattern.test(text)) effects.add(effect); };
-  add("CONTRACT_TERMINATION", /계약.{0,14}(해지|해제|종료)/s);
+  add("CONTRACT_TERMINATION", /(?:신용|재무|등급|연체|허위|부도|파산)[\s\S]{0,160}계약.{0,14}(해지|해제|종료)|계약.{0,14}(해지|해제|종료)[\s\S]{0,160}(?:대출.{0,12}(제한|중단))/s);
+  add("TERMINATION_RIGHT", /(?:부득이한|합리적인)\s*사정.{0,40}(?:서면.{0,20})?계약.{0,12}(해지|종료)/s);
   add("ACCELERATION", /기한이익.{0,12}상실|기한전.{0,10}(채무변제|상환)/s);
   add("IMMEDIATE_REPAYMENT", /즉시.{0,12}(전액|모두|금액|채무).{0,12}(상환|변제|지급)|곧.{0,8}(상환|변제)/s);
   add("LOAN_SUSPENSION", /대출.{0,12}(중단|정지)/s);
   add("LOAN_RESTRICTION", /대출.{0,12}(제한|거절)/s);
   add("DEFAULT_INTEREST", /연체이자|지연배상금|지체.{0,8}(이자|배상)/s);
-  add("DAMAGE_LIABILITY", /손해배상.{0,8}(책임|의무|하여야|한다)|손해를.{0,8}배상/s);
+  add("DIRECT_DAMAGE_LIABILITY", /손해배상.{0,8}(책임|의무|하여야|한다)|손해를.{0,8}배상|(?:전산|시스템)[\s\S]{0,80}손해.{0,12}부담/s);
   add("DIRECT_FINANCIAL_LOSS", /위약금|몰취|환급하지\s*않|반환하지\s*않/s);
   add("CANCELLATION_RESTRICTION", /취소할\s*수\s*없|취소.{0,10}(제한|불가)/s);
+  add("CANCELLATION_DEADLINE", /(?:만기|지급기일).{0,30}(?:전|까지).{0,30}취소|취소.{0,30}(?:만기|지급기일).{0,20}(?:전|까지)/s);
+  add("CANCELLATION_EXCEPTION", /(?:동의.{0,10}(?:생략|없이)|발행\s*당일|압류|가압류)[\s\S]{0,100}취소/s);
   add("MODIFICATION_RESTRICTION", /변경할\s*수\s*없|변경.{0,10}(제한|불가)/s);
   add("RIGHT_TO_CLAIM_RESTRICTED", /책임을\s*물을\s*수\s*없|대항할\s*수\s*없|주장할\s*수\s*없|이의를.{0,8}(제기할\s*수\s*없|주장할\s*수\s*없)/s);
   add("CONSENT_REQUIRED", /동의를.{0,8}(받아야|얻어야|받아야\s*한다)|동의가.{0,8}필요/s);
   add("CORRECTION_RESTRICTION", /정정할\s*수\s*없|정정.{0,8}(제한|불가)/s);
   add("OPERATION_SUSPENSION", /업무.{0,10}(중단|정지)|거래.{0,10}(중단|정지)/s);
   add("CONTRACT_CONTINUATION", /자동.{0,4}(연장|갱신)|\d+년씩.{0,6}연장/s);
+  add("OBLIGATION_SURVIVES_TERMINATION", /계약.{0,12}(?:종료|해지)[\s\S]{0,80}(?:계속\s*적용|효력.{0,8}(?:유지|존속))/s);
+  add("PAYMENT_OBLIGATION_CONTINUES", /(?:회사정리|회생|파산|기한.{0,6}이익.{0,6}상실)[\s\S]{0,120}(?:지급|변제)채무.{0,20}(?:영향을\s*받지|유지|존속)/s);
+  add("PAYMENT_ALLOCATION", /충당.{0,20}(?:순서|방법)|(?:순서|방법).{0,20}충당/s);
   add("DEADLINE_TO_NOTIFY", /(당일|\d+일\s*(?:전|이내)|까지|기간\s*내).{0,24}(통지|알려|이의|신고|제출|의사표시)|(?:통지|알려|이의|신고|제출|의사표시).{0,24}(당일|\d+일\s*(?:전|이내)|까지|기간\s*내)/s);
   add("PAYMENT_OBLIGATION", /(지급|납입|상환|변제).{0,12}(하여야\s*한다|해야\s*한다|하기로\s*한다|의무)/s);
   add("NOTICE_OBLIGATION", /(통지|통보|신고|알려야|제출).{0,12}(하여야\s*한다|해야\s*한다|하기로\s*한다|의무)/s);
   add("ASSIGNMENT_PROCEDURE", /채권양도|양도승낙|양도.{0,8}(통지|통보)/s);
   add("REPRESENTATION", /(확인|보증).{0,10}(한다|하기로\s*한다)/s);
-  add("CORE_PROCEDURE", /(절차|방법|방식|계좌).{0,16}(따라|의하여|한다|하여야)/s);
+  add("CORE_OPERATIONAL_PROCEDURE", /(절차|방법|방식|계좌).{0,16}(따라|의하여|한다|하여야)/s);
+  add("DEFINITION", /제\s*2\s*조.{0,20}(?:정의|용어)|(?:이라\s*함은|이라\s*한다)/s);
+  add("PURPOSE", /제\s*1\s*조.{0,20}목적|이\s*계약.{0,30}목적/s);
+  add("CONFIDENTIALITY", /비밀.{0,12}(유지|누설|유출)|비밀정보/s);
+  add("JURISDICTION", /관할.{0,8}(법원|합의)|소송.{0,12}법원/s);
+  add("GENERAL_COOPERATION", /상호.{0,12}(협력|지원)|자료.{0,12}제출.{0,20}협력/s);
+  add("REFERENCE_TERMS", /(?:약관|기본약관).{0,20}(?:적용|따른다)/s);
   if (!effects.size) effects.add("GENERAL_TERM");
   return [...effects];
 }
@@ -203,6 +215,14 @@ const articleMarkerPattern = /^제\s*\d+\s*조(?:의\s*\d+)?/;
 const childMarkerPattern = /^(?:제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
 const listPreamblePattern = /(다음\s*(?:각\s*)?호|다음\s*(?:각\s*)?사유|다음의\s*경우|각\s*호\s*중\s*(?:하나|어느 하나)|어느\s*하나에\s*해당)/;
 const predicatePattern = /(한다|된다|있다|없다|아니한다|않는다|하여야\s*한다|해야\s*한다|할\s*수\s*있다|할\s*수\s*없다|요구할\s*수\s*있다|부담한다|지급한다|상환한다|통지한다|제출한다|확인한다|제한한다|종료한다|해지한다|본다)[.!?。]?$/;
+
+function markerDepth(marker: string) {
+  if (articleMarkerPattern.test(marker)) return 0;
+  if (/^(?:제\s*\d+\s*항|[①-⑳])/.test(marker)) return 1;
+  if (/^(?:\(?\d+\)|\d+[.)])/.test(marker)) return 2;
+  if (/^[가-힣][.)]/.test(marker)) return 3;
+  return 99;
+}
 
 function hasUnclosedDelimiter(text: string) {
   return [["(", ")"], ["[", "]"], ["（", "）"], ["「", "」"], ["『", "』"]].some(([open, close]) => text.split(open).length > text.split(close).length);
@@ -269,6 +289,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
 
   const merged: Array<{ page: number; endPage: number; text: string; sourceBlockIds: string[]; marked: boolean; heading: boolean }> = [];
   let activeListParent = -1;
+  let activeListParentDepth = 99;
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
     if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text) || isNonClauseBoilerplate(text)) continue;
@@ -277,11 +298,12 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const beginsChild = childMarkerPattern.test(marker) && !beginsArticle;
     if (activeListParent >= 0) {
       const parent = merged[activeListParent];
-      if (!beginsArticle && (beginsChild || !block.heading)) {
+      const depth = markerDepth(marker);
+      if (!beginsArticle && ((beginsChild && depth > activeListParentDepth) || (!beginsChild && !block.heading))) {
         parent.text = normalize(`${parent.text} ${text}`); parent.endPage = block.page; parent.sourceBlockIds.push(block.id);
         continue;
       }
-      activeListParent = -1;
+      activeListParent = -1; activeListParentDepth = 99;
     }
     const previous = merged[merged.length - 1];
     const previousIsIncomplete = !!previous && isIncompleteText(previous.text);
@@ -289,10 +311,10 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const sameClause = !!previous && !beginsArticle && ((previousIsIncomplete && !block.heading) || (!block.marked && !block.heading && previous.endPage === block.page && (previous.marked || previous.heading)) || (crossesAdjacentPage && previousIsIncomplete));
     if (sameClause) {
       previous.text = normalize(`${previous.text} ${text}`); previous.endPage = block.page; previous.sourceBlockIds.push(block.id);
-      if (listPreamblePattern.test(previous.text)) activeListParent = merged.length - 1;
+      if (listPreamblePattern.test(previous.text)) { activeListParent = merged.length - 1; activeListParentDepth = markerDepth(previous.text.match(markerPattern)?.[1] ?? ""); }
     } else {
       merged.push({ page: block.page, endPage: block.page, text, sourceBlockIds: [block.id], marked: block.marked, heading: block.heading });
-      if (listPreamblePattern.test(text)) activeListParent = merged.length - 1;
+      if (listPreamblePattern.test(text)) { activeListParent = merged.length - 1; activeListParentDepth = markerDepth(marker); }
     }
   }
 
@@ -309,7 +331,8 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const risk = classify(block.text);
     const sourceText = block.sourceBlockIds.map((blockId) => sourceBlockMap.get(blockId)).filter((value): value is string => !!value).join(" ");
     if (!sourceText || isIncompleteText(sourceText)) continue;
-    clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, text: sourceText, original: sourceText.slice(0, 1200), sourceBlockIds: block.sourceBlockIds, ...risk });
+    const sourceClauseId = `${marker}_${textHash.slice(0, 12).toUpperCase()}`;
+    clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, text: sourceText, original: sourceText.slice(0, 1200), sourceBlockIds: block.sourceBlockIds, sourceClauseIds: [sourceClauseId], ...risk });
   }
   if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
   return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };
