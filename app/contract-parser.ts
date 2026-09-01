@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-6_prompt-15_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-7_prompt-16_risk-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -41,6 +41,11 @@ const infoDefinitions = [
   ["금융회사", ["금융회사", "금융기관", "회사명", "채권자", "대주"], "이 계약을 제공하거나 돈을 빌려주는 회사입니다."],
   ["채무자", ["채무자", "차주", "대출받는 사람", "계약자"], "계약에 따라 돈을 갚거나 의무를 지는 사람입니다."],
   ["대출금액", ["대출금액", "대출 원금", "대출원금", "약정금액"], "이 계약에 따라 빌리는 원금입니다."],
+  ["사채 발행금액", ["사채의 권면총액", "사채 권면총액", "권면총액", "사채 발행금액", "총 발행금액", "발행총액"], "이 계약으로 발행하는 사채의 전체 금액입니다."],
+  ["지급금액", ["지급금액", "납입금액", "인수대금", "납입총액"], "이 계약에 따라 실제로 지급하거나 납입하는 금액입니다."],
+  ["표면이율", ["표면이율", "표면금리", "사채이율", "약정이율", "이자율"], "계약서에 적힌 기본 이율입니다."],
+  ["발행일", ["사채 발행일", "발행일"], "사채가 발행되는 날짜입니다."],
+  ["만기일", ["사채 만기일", "만기일", "상환기일"], "원금 상환이 예정된 날짜입니다."],
   ["계약일", ["계약일", "계약 체결일", "약정일", "작성일"], "계약을 체결하거나 작성한 날짜입니다."],
   ["계약기간", ["계약기간", "대출기간", "약정기간"], "계약의 효력이 유지되는 기간입니다."],
   ["적용기간", ["적용기간", "보장기간"], "이 계약의 조건이 적용되는 기간입니다."],
@@ -49,6 +54,22 @@ const infoDefinitions = [
 const infoAliases = infoDefinitions.flatMap(([label, aliases, explanation]) => aliases.map((alias) => ({ alias, label, explanation })));
 const aliasPattern = infoAliases.map(({ alias }) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length).join("|");
 const noticePattern = /(테스트용|시험용|가상(?:의)?\s*문서|실제\s*계약(?:으로)?\s*(?:사용|이용)할\s*수\s*없|서비스\s*검증용|분석\s*기능을\s*(?:시험|검증)|참고용|법적\s*효력(?:이)?\s*없)/i;
+const administrativePattern = /(심의필|문서\s*(?:관리|식별)\s*(?:번호|정보)|내부\s*(?:관리|식별)\s*(?:번호|정보)|공문\s*번호|버전\s*번호|개정\s*번호|작성\s*부서|담당\s*부서|사채의\s*(?:공식\s*)?명칭|명칭은\s*[‘'"“][^’'"”]+[’'"”](?:로\s*한다|입니다))/i;
+const conditionPreamblePattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?\s*)?(?:사채의\s*)?(?:발행\s*)?조건(?:\s*안내)?\s*(?:이\s*계약에\s*따라|이\s*계약에\s*의하여|이\s*계약에\s*의해)?[^.!?。]{0,80}(?:다음\s*(?:각\s*)?조항|다음과\s*같(?:다|습니다)|명시됩니다)[.!?。]?$/i;
+
+function isNonClauseBoilerplate(text: string) {
+  const value = normalize(text);
+  return noticePattern.test(value) || administrativePattern.test(value) || conditionPreamblePattern.test(value);
+}
+
+function basicInfoExplanation(label: string, value: string, fallback: string) {
+  if (label === "사채 발행금액") return `이 계약으로 사채 총 ${value}을 발행해요.`;
+  if (label === "지급금액") return `${value}을 지급하거나 납입해야 해요.`;
+  if (label === "표면이율") return `계약서에 적힌 기본 이율은 ${value}예요.`;
+  if (label === "발행일") return `사채 발행일은 ${value}예요.`;
+  if (label === "만기일") return `원금을 갚기로 한 날짜는 ${value}예요.`;
+  return fallback;
+}
 
 function extractNonClauses(pages: Line[][]) {
   const basicInfo: BasicInfo[] = [];
@@ -61,10 +82,11 @@ function extractNonClauses(pages: Line[][]) {
     for (const match of matches) {
       const definition = infoAliases.find(({ alias }) => alias === match[1]);
       const value = normalize(match[2]);
-      if (definition && value && !usedLabels.has(definition.label)) {
-        basicInfo.push({ label: definition.label, value, explanation: definition.explanation, page: line.page });
+      const isSimpleFact = !!definition && value.length <= 100 && !/(하여야|해야|할\s*수|경우|다만|단,|위반|아니한다|않는다|책임|의무)/.test(value);
+      if (definition && isSimpleFact && !usedLabels.has(definition.label)) {
+        basicInfo.push({ label: definition.label, value, explanation: basicInfoExplanation(definition.label, value, definition.explanation), page: line.page });
         usedLabels.add(definition.label);
-        excluded.add(key);
+        if (compact(match[0]).length >= compact(line.text).length * .85) excluded.add(key);
       }
     }
     if (noticePattern.test(line.text)) {
@@ -80,7 +102,7 @@ function extractNonClauses(pages: Line[][]) {
       excluded.add(`${title.page}:${compact(title.text)}`);
     }
   }
-  return { basicInfo, notices: [...new Map(notices.map((notice) => [`${notice.page}:${compact(notice.text)}`, notice])).values()], excluded };
+  return { basicInfo, notices: [], excluded };
 }
 
 async function sha256(value: ArrayBuffer | string) {
@@ -160,7 +182,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const merged: Array<{ page: number; text: string; marked: boolean; heading: boolean }> = [];
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
-    if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text)) continue;
+    if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text) || isNonClauseBoilerplate(text)) continue;
     const previous = merged[merged.length - 1];
     const previousIsIncomplete = previous && !/[.!?。]$/.test(previous.text);
     const sameClause = previous && previous.page === block.page && !block.marked && !block.heading && (previous.marked || previous.heading || previousIsIncomplete);
