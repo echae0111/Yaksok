@@ -299,14 +299,9 @@ function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
   return items.filter((item) => !removed.has(item.id)).map((item) => byId.get(item.id) ?? item);
 }
 
-function isProgrammaticallyRelevant(clause: RawClause) {
-  if (clause.effects.some((effect) => effect !== "GENERAL_TERM")) return true;
-  return /(제\s*\d+\s*조|목적|정의|비밀유지|관할법원|계약.{0,8}(?:기간|효력)|하여야\s*한다|하기로\s*한다|할\s*수\s*(?:있|없)|의무|책임)/s.test(clause.original);
-}
-
-function auditCoverage(clauses: RawClause[], items: Item[]) {
+function auditCoverage(expectedSourceClauseIds: Set<string>, items: Item[]) {
   const covered = new Set(items.flatMap((item) => item.sourceClauseIds));
-  return clauses.filter(isProgrammaticallyRelevant).filter((clause) => clause.sourceClauseIds.some((id) => !covered.has(id)));
+  return [...expectedSourceClauseIds].filter((id) => !covered.has(id));
 }
 
 function hasUnsupportedInference(explanation: ClauseExplanation, original: string) {
@@ -386,13 +381,15 @@ export default function Home() {
       let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
-        if (!explanation.relevant) {
-          if (isProgrammaticallyRelevant(clause)) throw new Error(`${clause.marker} 조항의 독립적인 의미가 설명에서 누락됐어요. 다시 분석해 주세요.`);
-          return [];
-        }
+        // AI가 문서 안내·서식·상식으로 판정한 항목은 정상적으로 제외합니다.
+        // 정규식 판정과 다르다는 이유만으로 전체 분석을 중단하지 않습니다.
+        if (!explanation.relevant) return [];
         if (hasUnsupportedInference(explanation, clause.original)) return [];
         return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
       });
+      // coverage 검사는 '실제 카드로 채택된 의미'를 기준선으로 잡고,
+      // 이후 중복 병합 과정에서 그 의미가 사라지는지만 확인합니다.
+      const expectedSourceClauseIds = new Set(items.flatMap((item) => item.sourceClauseIds));
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";
       const priorityCount = items.filter((item) => item.level === "danger" || item.level === "caution").length;
@@ -406,8 +403,8 @@ export default function Home() {
           if (response.ok) items = mergeSimilarItems(items, result.duplicateGroups ?? []);
         } catch { /* 부가적인 중복 검사 실패 시 원본 분석 항목을 그대로 사용합니다. */ }
       }
-      const uncovered = auditCoverage(parsed.clauses, items);
-      if (uncovered.length) throw new Error(`계약서의 일부 의미가 분석 카드에서 누락됐어요 (${uncovered.slice(0, 3).map((clause) => clause.marker).join(", ")}). 다시 분석해 주세요.`);
+      const uncovered = auditCoverage(expectedSourceClauseIds, items);
+      if (uncovered.length) throw new Error("분석 결과를 정리하는 과정에서 일부 근거가 누락됐어요. 다시 분석해 주세요.");
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType, summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
