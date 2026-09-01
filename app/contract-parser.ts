@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-8_prompt-17_relevance-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-9_prompt-17_relevance-1_ocr-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -160,20 +160,47 @@ function pageBlocks(lines: Line[]) {
   return blocks;
 }
 
-export async function parseContract(file: File, onPageProgress?: (currentPage: number, totalPages: number) => void): Promise<{ documentHash: string; clauses: RawClause[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] }> {
+async function readScannedPdf(pdf: pdfjs.PDFDocumentProxy, onProgress?: (currentPage: number, totalPages: number) => void) {
+  const pages: Line[][] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1.7 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("스캔 페이지 이미지를 만들지 못했습니다.");
+    context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    const image = canvas.toDataURL("image/jpeg", .82).replace(/^data:image\/jpeg;base64,/, "");
+    const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: pageNumber, image }) });
+    const result = await response.json() as { page?: number; text?: string; error?: string };
+    if (!response.ok || !result.text) throw new Error(result.error || `${pageNumber}쪽의 글자를 읽지 못했습니다.`);
+    const lines = result.text.split(/\r?\n/).map(cleanExtractedText).filter(Boolean);
+    pages.push(lines.map((text, index) => ({ page: pageNumber, y: (lines.length - index) * 12, height: 10, text })));
+    canvas.width = 1; canvas.height = 1; page.cleanup(); onProgress?.(pageNumber, pdf.numPages);
+  }
+  return pages;
+}
+
+export async function parseContract(file: File, onPageProgress?: (currentPage: number, totalPages: number) => void, onOcrProgress?: (currentPage: number, totalPages: number) => void): Promise<{ documentHash: string; clauses: RawClause[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] }> {
   const data = await file.arrayBuffer();
   const documentHash = await sha256(data);
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
-  const pages: Line[][] = [];
+  let pages: Line[][] = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
     pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, pageNumber));
     onPageProgress?.(pageNumber, pdf.numPages);
   }
-  const textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
-  if (textLength < Math.max(80, pdf.numPages * 20)) throw new Error("이 PDF는 스캔 이미지 중심이라 글자를 충분히 읽지 못했어요. 텍스트 검색이 가능한 PDF로 다시 시도해 주세요.");
+  let textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
+  if (textLength < Math.max(80, pdf.numPages * 20)) {
+    onOcrProgress?.(0, pdf.numPages);
+    pages = await readScannedPdf(pdf, onOcrProgress);
+    textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
+    if (textLength < Math.max(80, pdf.numPages * 20)) throw new Error("OCR로도 글자를 충분히 읽지 못했어요. 더 선명한 PDF로 다시 시도해 주세요.");
+  }
 
   const edgeCounts = new Map<string, number>();
   for (const lines of pages) for (const line of [...lines.slice(0, 2), ...lines.slice(-2)]) edgeCounts.set(compact(line.text), (edgeCounts.get(compact(line.text)) ?? 0) + 1);

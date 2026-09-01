@@ -321,7 +321,7 @@ export default function Home() {
     try {
       // PDF 처리 코드는 파일을 선택한 뒤에만 불러와 첫 화면을 가볍게 유지합니다.
       const { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis } = await import("./contract-parser");
-      const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }));
+      const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }), (currentPage, totalPages) => setProgress({ phase: `스캔된 페이지의 글자를 인식하고 있어요 (${currentPage} / ${totalPages}쪽)`, completed: currentPage, total: totalPages, percent: 14 + Math.round((currentPage / totalPages) * 4) }));
       setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
       const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
       const cached = await getCachedAnalysis<Analysis>(cacheKey);
