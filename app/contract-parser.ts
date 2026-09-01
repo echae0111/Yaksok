@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-9_prompt-17_relevance-1_ocr-2_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-10_structure-1_prompt-18_relevance-1_ocr-2_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -116,14 +116,16 @@ async function sha256(value: ArrayBuffer | string) {
 function classify(text: string): { signals: RiskSignals; level: RawClause["level"] } {
   const signals: RiskSignals = {
     immediateRepayment: /(기한이익.{0,12}상실|즉시.{0,12}(전액|모두).{0,12}(상환|변제)|남은.{0,16}(전액|모두).{0,12}(갚|상환))/s.test(text),
-    terminationOrExclusion: /(계약.{0,10}(해지|해제|종료)|보장하지 아니|보장하지 않|면책|지급하지 아니|지급하지 않)/s.test(text),
+    terminationOrExclusion: /(계약.{0,14}(해지|해제|종료)|대출.{0,12}(중단|제한|거절)|보장하지 아니|보장하지 않|면책|지급하지 아니|지급하지 않)/s.test(text),
     additionalCost: /(수수료|위약금|연체금|연체이자|가산이자|추가.{0,8}(비용|부담)|손해배상)/s.test(text),
     creditImpact: /(신용정보|신용도|신용점수|연체정보.{0,8}(등록|제공))/s.test(text),
-    rightRestriction: /(권리.{0,8}(제한|상실)|담보권.{0,8}(실행|처분)|강제집행|채권.{0,8}(회수|추심)|압류)/s.test(text),
-    deadline: /(까지.{0,12}(신청|통지|제출|납입|지급)|기한|기간.{0,8}내|\d+일\s*이내)/s.test(text),
+    rightRestriction: /(권리.{0,8}(제한|상실)|책임을\s*물을\s*수\s*없|취소할\s*수\s*없|변경.{0,8}(주장|효력).{0,8}(없|제한)|담보권.{0,8}(실행|처분)|강제집행|채권.{0,8}(회수|추심)|압류)/s.test(text),
+    deadline: /(당일|까지.{0,12}(신청|통지|제출|납입|지급|확인)|기한|기간.{0,8}내|\d+일\s*이내)/s.test(text),
     consumerDuty: /(하여야 한다|해야 한다|의무|반드시|지체 없이|통지하여야|제출하여야)/s.test(text),
   };
-  const weights = [signals.immediateRepayment ? 5 : 0, signals.terminationOrExclusion ? 5 : 0, signals.rightRestriction ? 4 : 0, signals.additionalCost ? 4 : 0, signals.creditImpact ? 4 : 0, signals.deadline ? 3 : 0, signals.consumerDuty ? 2 : 0];
+  const severeFinancialEffect = /(연체이자|지연배상금|손해배상|즉시.{0,12}(지급|상환|변제)|지급.{0,8}의무.{0,8}(확정|확대))/s.test(text);
+  const rightsLost = /(권리.{0,8}상실|권리를\s*잃|책임을\s*물을\s*수\s*없)/s.test(text);
+  const weights = [signals.immediateRepayment ? 5 : 0, signals.terminationOrExclusion ? 5 : 0, severeFinancialEffect ? 5 : 0, rightsLost ? 5 : 0, signals.rightRestriction ? 4 : 0, signals.additionalCost ? 4 : 0, signals.creditImpact ? 4 : 0, signals.deadline ? 3 : 0, signals.consumerDuty ? 2 : 0];
   const score = Math.max(...weights);
   return { signals, level: score >= 5 ? "danger" : score >= 3 ? "caution" : score >= 1 ? "important" : "general" };
 }
@@ -158,6 +160,24 @@ function pageBlocks(lines: Line[]) {
     else blocks[blocks.length - 1].lines.push(line.text);
   }
   return blocks;
+}
+
+const articleMarkerPattern = /^제\s*\d+\s*조(?:의\s*\d+)?/;
+const childMarkerPattern = /^(?:제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
+const listPreamblePattern = /(다음\s*(?:각\s*)?호|다음\s*(?:각\s*)?사유|다음의\s*경우|각\s*호\s*중\s*(?:하나|어느 하나)|어느\s*하나에\s*해당)/;
+const predicatePattern = /(한다|된다|있다|없다|아니한다|않는다|하여야\s*한다|해야\s*한다|할\s*수\s*있다|할\s*수\s*없다|요구할\s*수\s*있다|부담한다|지급한다|상환한다|통지한다|제출한다|확인한다|제한한다|종료한다|해지한다|본다)[.!?。]?$/;
+
+function hasUnclosedDelimiter(text: string) {
+  return [["(", ")"], ["[", "]"], ["（", "）"], ["「", "」"], ["『", "』"]].some(([open, close]) => text.split(open).length > text.split(close).length);
+}
+
+function isIncompleteText(text: string) {
+  const value = normalize(text);
+  if (!value) return true;
+  if (hasUnclosedDelimiter(value)) return true;
+  if (/[·,:;\-–—(（[〔]$/.test(value)) return true;
+  if (/(?:및|또는|하거나|하는|하여|하고|하되|때|경우에는|경우|경우로서|위하여|따라|의하여|다음과\s*같다|다음\s*(?:각\s*)?호(?:의\s*경우)?)[.!?。]?$/.test(value)) return true;
+  return value.length < 70 && !predicatePattern.test(value) && !/[.!?。]$/.test(value);
 }
 
 async function readScannedPdf(pdf: pdfjs.PDFDocumentProxy, onProgress?: (currentPage: number, totalPages: number) => void) {
@@ -208,15 +228,33 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const separated = extractNonClauses(pages);
   const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`))));
 
-  const merged: Array<{ page: number; text: string; marked: boolean; heading: boolean }> = [];
+  const merged: Array<{ page: number; endPage: number; text: string; marked: boolean; heading: boolean }> = [];
+  let activeListParent = -1;
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
     if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text) || isNonClauseBoilerplate(text)) continue;
+    const marker = text.match(markerPattern)?.[1] ?? "";
+    const beginsArticle = articleMarkerPattern.test(marker);
+    const beginsChild = childMarkerPattern.test(marker) && !beginsArticle;
+    if (activeListParent >= 0) {
+      const parent = merged[activeListParent];
+      if (!beginsArticle && (beginsChild || !block.heading)) {
+        parent.text = normalize(`${parent.text} ${text}`); parent.endPage = block.page;
+        continue;
+      }
+      activeListParent = -1;
+    }
     const previous = merged[merged.length - 1];
-    const previousIsIncomplete = previous && !/[.!?。]$/.test(previous.text);
-    const sameClause = previous && previous.page === block.page && !block.marked && !block.heading && (previous.marked || previous.heading || previousIsIncomplete);
-    if (sameClause) previous.text = normalize(`${previous.text} ${text}`);
-    else merged.push({ page: block.page, text, marked: block.marked, heading: block.heading });
+    const previousIsIncomplete = !!previous && isIncompleteText(previous.text);
+    const crossesAdjacentPage = !!previous && block.page === previous.endPage + 1;
+    const sameClause = !!previous && !block.marked && !block.heading && ((previous.endPage === block.page && (previous.marked || previous.heading || previousIsIncomplete)) || (crossesAdjacentPage && previousIsIncomplete));
+    if (sameClause) {
+      previous.text = normalize(`${previous.text} ${text}`); previous.endPage = block.page;
+      if (listPreamblePattern.test(previous.text)) activeListParent = merged.length - 1;
+    } else {
+      merged.push({ page: block.page, endPage: block.page, text, marked: block.marked, heading: block.heading });
+      if (listPreamblePattern.test(text)) activeListParent = merged.length - 1;
+    }
   }
 
   const unique = new Set<string>();
