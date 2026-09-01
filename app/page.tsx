@@ -6,7 +6,7 @@ type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
 type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
-type ClauseExplanation = { clauseId: string; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
+type ClauseExplanation = { clauseId: string; relevant: boolean; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
 type Message = { role: "user" | "assistant"; text: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] };
 
@@ -351,10 +351,11 @@ export default function Home() {
         }
       }
       const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
-      let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).map((clause) => {
+      let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
-        return { id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item;
+        if (!explanation.relevant) return [];
+        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page } satisfies Item];
       });
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";

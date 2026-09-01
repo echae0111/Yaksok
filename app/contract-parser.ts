@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-7_prompt-16_risk-1_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-8_prompt-17_relevance-1_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type RawClause = { id: string; page: number; order: number; marker: string; text: string; original: string; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
@@ -45,6 +45,8 @@ const infoDefinitions = [
   ["지급금액", ["지급금액", "납입금액", "인수대금", "납입총액"], "이 계약에 따라 실제로 지급하거나 납입하는 금액입니다."],
   ["표면이율", ["표면이율", "표면금리", "사채이율", "약정이율", "이자율"], "계약서에 적힌 기본 이율입니다."],
   ["발행일", ["사채 발행일", "발행일"], "사채가 발행되는 날짜입니다."],
+  ["납입기일", ["사채 납입기일", "납입기일", "납입일"], "돈을 납입하기로 한 날짜입니다."],
+  ["이자 계산 시작일", ["사채 이자 기산일", "이자 기산일", "이자계산개시일"], "이자를 계산하기 시작하는 날짜입니다."],
   ["만기일", ["사채 만기일", "만기일", "상환기일"], "원금 상환이 예정된 날짜입니다."],
   ["계약일", ["계약일", "계약 체결일", "약정일", "작성일"], "계약을 체결하거나 작성한 날짜입니다."],
   ["계약기간", ["계약기간", "대출기간", "약정기간"], "계약의 효력이 유지되는 기간입니다."],
@@ -54,7 +56,7 @@ const infoDefinitions = [
 const infoAliases = infoDefinitions.flatMap(([label, aliases, explanation]) => aliases.map((alias) => ({ alias, label, explanation })));
 const aliasPattern = infoAliases.map(({ alias }) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length).join("|");
 const noticePattern = /(테스트용|시험용|가상(?:의)?\s*문서|실제\s*계약(?:으로)?\s*(?:사용|이용)할\s*수\s*없|서비스\s*검증용|분석\s*기능을\s*(?:시험|검증)|참고용|법적\s*효력(?:이)?\s*없)/i;
-const administrativePattern = /(심의필|문서\s*(?:관리|식별)\s*(?:번호|정보)|내부\s*(?:관리|식별)\s*(?:번호|정보)|공문\s*번호|버전\s*번호|개정\s*번호|작성\s*부서|담당\s*부서|사채의\s*(?:공식\s*)?명칭|명칭은\s*[‘'"“][^’'"”]+[’'"”](?:로\s*한다|입니다))/i;
+const administrativePattern = /(심의필|문서\s*(?:관리|식별)\s*(?:번호|정보)|내부\s*(?:관리|식별)\s*(?:번호|정보)|공문\s*번호|버전\s*번호|개정\s*번호|작성\s*부서|담당\s*부서|문서의\s*제목|수입\s*인지\s*부착\s*(?:공간|위치)|사채권?의\s*발행\s*장소|사채의\s*(?:공식\s*)?명칭|[갑을]의\s*명칭|보증\s*서명\s*날짜\s*표시|계약\s*내용\s*설명\s*담당자\s*정보\s*기록|명칭은\s*[‘'"“][^’'"”]+[’'"”](?:로\s*한다|입니다))/i;
 const conditionPreamblePattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?\s*)?(?:사채의\s*)?(?:발행\s*)?조건(?:\s*안내)?\s*(?:이\s*계약에\s*따라|이\s*계약에\s*의하여|이\s*계약에\s*의해)?[^.!?。]{0,80}(?:다음\s*(?:각\s*)?조항|다음과\s*같(?:다|습니다)|명시됩니다)[.!?。]?$/i;
 
 function isNonClauseBoilerplate(text: string) {

@@ -7,8 +7,9 @@ const explanationSchema = (clauseCount: number) => ({
   properties: {
     explanations: { type: "array", minItems: clauseCount, maxItems: clauseCount, items: {
       type: "object", additionalProperties: false,
-      required: ["title", "core", "easyExplanation", "impact", "checkPoint", "action"],
+      required: ["relevant", "title", "core", "easyExplanation", "impact", "checkPoint", "action"],
       properties: {
+        relevant: { type: "boolean" },
         title: { type: "string" }, core: { type: "string" },
         easyExplanation: { type: "string" }, impact: { type: "string" }, checkPoint: { type: "string" }, action: { type: "string" },
       },
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
     const payload = await response.json() as GeminiPayload;
     const text = geminiText(payload);
     if (!text) return jsonError("조항 설명을 읽지 못했습니다.", 502);
-    const result = JSON.parse(text) as { explanations: Array<Record<string, string>>; glossary: unknown[] };
+    const result = JSON.parse(text) as { explanations: Array<{ relevant: boolean } & Record<string, string | boolean>>; glossary: unknown[] };
     if (result.explanations.length !== clauses.length) return jsonError("일부 조항 설명이 누락됐습니다.", 502);
     return Response.json({
       explanations: result.explanations.map((explanation, index) => ({ ...explanation, clauseId: clauses[index].id })),
