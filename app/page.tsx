@@ -44,12 +44,10 @@ const financeQuizzes = [
   { question: "대출 상환일을 놓치지 않으려면 가장 유용한 정보는?", choices: ["정확한 납부일과 자동이체 계좌", "계약서 표지 사진", "은행 광고 문구"], answer: 0, explanation: "납부일과 출금 계좌를 확인하고 미리 잔액을 준비하면 의도하지 않은 연체를 줄일 수 있어요." },
 ];
 const QUIZ_SET_SIZE = 10;
-const CLAUSES_PER_BATCH = 8;
+const CLAUSES_PER_BATCH = 20;
 const BATCH_CONCURRENCY = 1;
 type CachedClauseExplanation = { explanation: ClauseExplanation; glossary: GlossaryTerm[] };
 type AnalysisProgress = { phase: string; completed: number; total: number; percent: number };
-type DuplicateCandidate = { id: string; source: string; title: string; summary: string; effect: string };
-type DuplicateDecision = { keepId: string; mergeIds: string[] };
 class RateLimitError extends Error {
   constructor(message: string, public retryAfterSeconds: number, public quotaExhausted: boolean) { super(message); }
 }
@@ -228,80 +226,6 @@ function WaitingQuiz() {
   </section>;
 }
 
-function similarityText(value: string) {
-  return value.normalize("NFKC").toLowerCase()
-    .replace(/바뀌(?:는|어|었|ㄹ|게|다|ㅂ니다)?|변경(?:되는|되어|됐다|됩니다)?/g, "변경")
-    .replace(/갚(?:는|아야|으면|습니다)?|상환(?:하는|해야|합니다)?/g, "상환")
-    .replace(/받(?:는|았|습니다)?|교부(?:받|하는|합니다)?/g, "교부")
-    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
-}
-
-function bigrams(value: string) {
-  const compact = similarityText(value).replace(/\s/g, "");
-  return new Set(Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2)));
-}
-
-function diceSimilarity(left: string, right: string) {
-  const a = bigrams(left); const b = bigrams(right);
-  if (!a.size || !b.size) return 0;
-  const overlap = [...a].filter((gram) => b.has(gram)).length;
-  return (2 * overlap) / (a.size + b.size);
-}
-
-function buildDuplicateCandidateGroups(items: Item[]) {
-  const parent = items.map((_, index) => index);
-  const explicitCounts = items.map((item) => item.marker.startsWith("BLOCK") ? 0 : 1);
-  const find = (index: number): number => parent[index] === index ? index : (parent[index] = find(parent[index]));
-  const unite = (left: number, right: number) => {
-    const a = find(left); const b = find(right);
-    if (a === b || explicitCounts[a] + explicitCounts[b] > 1) return;
-    parent[b] = a; explicitCounts[a] += explicitCounts[b];
-  };
-  const compact = items.map((item) => ({ title: similarityText(`${item.title} ${item.core}`), effect: similarityText(item.impact) }));
-  for (let left = 0; left < items.length; left++) for (let right = left + 1; right < items.length; right++) {
-    if (items[left].sourceArticle && items[right].sourceArticle && items[left].sourceArticle !== items[right].sourceArticle) continue;
-    if (!items[left].marker.startsWith("BLOCK") && !items[right].marker.startsWith("BLOCK")) continue;
-    const titleScore = diceSimilarity(compact[left].title, compact[right].title);
-    const effectScore = diceSimilarity(compact[left].effect, compact[right].effect);
-    const leftTokens = new Set(compact[left].title.split(" ").filter((token) => token.length >= 3));
-    const sharedTopic = compact[right].title.split(" ").some((token) => token.length >= 3 && leftTokens.has(token));
-    if (titleScore >= .38 || (sharedTopic && titleScore >= .22 && effectScore >= .18)) unite(left, right);
-  }
-  const groups = new Map<number, number[]>();
-  items.forEach((_, index) => { const root = find(index); groups.set(root, [...(groups.get(root) ?? []), index]); });
-  return [...groups.values()].filter((indexes) => indexes.length >= 2).flatMap((indexes) => {
-    const chunks: DuplicateCandidate[][] = [];
-    for (let offset = 0; offset < indexes.length; offset += 10) chunks.push(indexes.slice(offset, offset + 10).map((index) => ({ id: items[index].id, source: items[index].marker, title: items[index].title, summary: items[index].core, effect: items[index].impact })));
-    return chunks.filter((group) => group.length >= 2);
-  });
-}
-
-function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
-  const byId = new Map(items.map((item) => [item.id, item]));
-  const removed = new Set<string>();
-  for (const decision of decisions) {
-    const members = [decision.keepId, ...decision.mergeIds].map((id) => byId.get(id)).filter((item): item is Item => !!item && !removed.has(item.id));
-    if (members.length < 2 || members.filter((item) => !item.marker.startsWith("BLOCK")).length > 1) continue;
-    const articles = new Set(members.map((item) => item.sourceArticle).filter(Boolean));
-    if (articles.size > 1) continue;
-    const effectKeys = members.map((item) => [...item.effects].sort().join("|"));
-    if (new Set(effectKeys).size !== 1) continue;
-    const normalizedSources = members.map((item) => similarityText(item.original));
-    const longestSource = normalizedSources.reduce((longest, value) => value.length > longest.length ? value : longest, "");
-    if (normalizedSources.some((value) => !longestSource.includes(value))) continue;
-    const keep = members.find((item) => !item.marker.startsWith("BLOCK")) ?? byId.get(decision.keepId);
-    if (!keep) continue;
-    const originals = [...new Set(members.map((item) => item.original.trim()).filter(Boolean))];
-    const sourceBlockIds = [...new Set(members.flatMap((item) => item.sourceBlockIds))];
-    const sourceClauseIds = [...new Set(members.flatMap((item) => item.sourceClauseIds))];
-    const effects = [...new Set(members.flatMap((item) => item.effects))];
-    const pages = [...new Set(members.map((item) => item.page).filter((page): page is number => page !== null))];
-    byId.set(keep.id, { ...keep, original: originals.join("\n\n"), sourceBlockIds, sourceClauseIds, effects, page: pages.length === 1 ? pages[0] : null });
-    members.filter((item) => item.id !== keep.id).forEach((item) => removed.add(item.id));
-  }
-  return items.filter((item) => !removed.has(item.id)).map((item) => byId.get(item.id) ?? item);
-}
-
 function auditCoverage(expectedSourceClauseIds: Set<string>, items: Item[]) {
   const covered = new Set(items.flatMap((item) => item.sourceClauseIds));
   return [...expectedSourceClauseIds].filter((id) => !covered.has(id));
@@ -381,7 +305,7 @@ export default function Home() {
         }
       }
       const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
-      let items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
+      const items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
         if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
         // AI가 문서 안내·서식·상식으로 판정한 항목은 정상적으로 제외합니다.
@@ -390,22 +314,13 @@ export default function Home() {
         if (hasUnsupportedInference(explanation, clause.original)) return [];
         return [{ id: clause.id, marker: clause.marker, sourceArticle: clause.sourceArticle, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
       });
-      // coverage 검사는 '실제 카드로 채택된 의미'를 기준선으로 잡고,
-      // 이후 중복 병합 과정에서 그 의미가 사라지는지만 확인합니다.
+      // 계약서에서 별도로 추출된 조항은 내용이 유사해도 서로 합치지 않습니다.
+      // 각 카드와 근거 원문은 언제나 하나의 원본 조항에만 대응합니다.
       const expectedSourceClauseIds = new Set(items.flatMap((item) => item.sourceClauseIds));
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";
       const priorityCount = items.filter((item) => item.level === "danger" || item.level === "caution").length;
       const summary = priorityCount ? `계약서에서 확인한 ${items.length}개 항목 중 먼저 확인할 위험·주의 내용은 ${priorityCount}개입니다.` : `계약서에서 확인한 ${items.length}개 항목을 위험도와 중요도에 따라 정리했습니다.`;
-      const candidateGroups = buildDuplicateCandidateGroups(items);
-      if (candidateGroups.length) {
-        setProgress({ phase: "비슷한 설명만 골라 중복 여부를 확인하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 97 });
-        try {
-          const response = await fetch("/api/deduplicate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidateGroups }) });
-          const result = await readApiJson<{ duplicateGroups?: DuplicateDecision[] }>(response);
-          if (response.ok) items = mergeSimilarItems(items, result.duplicateGroups ?? []);
-        } catch { /* 부가적인 중복 검사 실패 시 원본 분석 항목을 그대로 사용합니다. */ }
-      }
       const uncovered = auditCoverage(expectedSourceClauseIds, items);
       if (uncovered.length) throw new Error("분석 결과를 정리하는 과정에서 일부 근거가 누락됐어요. 다시 분석해 주세요.");
       const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
