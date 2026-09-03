@@ -1,7 +1,6 @@
 "use client";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
-import CostCalculator from "./cost-calculator";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
@@ -462,7 +461,6 @@ export default function Home() {
         {!!analysis.notices.length && <aside className="documentNotices"><div><b>문서 안내</b><span>계약 조건이 아니므로 조항 수에서 제외했어요.</span></div>{analysis.notices.map((notice, index) => <p key={`${notice.page}-${index}`}>{notice.text}<small>{notice.page}쪽</small></p>)}</aside>}
         <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 구간 확인 완료</b><p>총 <strong>{analysis.items.length}개 항목</strong>을 확인했습니다.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
         <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
-        <CostCalculator basicInfo={analysis.basicInfo} />
         <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 조항 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
