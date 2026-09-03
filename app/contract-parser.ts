@@ -1,11 +1,11 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-12_semantic-coverage-2_source-lineage-2_effects-2_prompt-19_ocr-2_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-13_article-boundaries-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-20_ocr-2_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
-export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; text: string; original: string; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
+export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; sourceArticle: string | null; text: string; original: string; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
 export type BasicInfo = { label: string; value: string; explanation: string; page: number };
 export type DocumentNotice = { text: string; page: number };
 type Line = { page: number; y: number; height: number; text: string };
@@ -13,6 +13,7 @@ type Line = { page: number; y: number; height: number; text: string };
 const boundaryPattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])(?:\s|$)/;
 const markerPattern = /^(제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
 const normalize = (text: string) => text.normalize("NFKC").replace(/\s+/g, " ").trim();
+const explicitArticlePattern = /제\s*\d+\s*조(?:의\s*\d+)?/g;
 const brokenGlyphPattern = /[□■�\u0000]/g;
 function cleanExtractedText(text: string) {
   const normalized = normalize(text);
@@ -193,6 +194,29 @@ function groupLines(items: Array<{ str?: string; transform?: number[]; height?: 
   return groups.sort((a, b) => b.y - a.y);
 }
 
+function splitExplicitArticleLines(pages: Line[][]) {
+  return pages.map((lines) => lines.flatMap((line) => {
+    const matches = [...line.text.matchAll(explicitArticlePattern)];
+    if (matches.length <= 1 && (matches[0]?.index ?? 0) === 0) return [line];
+    const boundaries = matches.map((match) => match.index ?? 0).filter((index) => {
+      if (index === 0) return true;
+      const before = line.text.slice(0, index).trimEnd();
+      const after = line.text.slice(index + matchArticleLength(line.text, index)).trimStart();
+      const hasHeading = /^[（(][^）)]{1,60}[）)]/.test(after);
+      return hasHeading || /[.!?。]$/.test(before);
+    });
+    if (!boundaries.some((index) => index > 0)) return [line];
+    const starts = [...new Set([0, ...boundaries])].sort((a, b) => a - b);
+    return starts.map((start, index) => cleanExtractedText(line.text.slice(start, starts[index + 1] ?? line.text.length)))
+      .filter(Boolean)
+      .map((text, index) => ({ ...line, y: line.y - index * .01, text }));
+  }));
+}
+
+function matchArticleLength(text: string, index: number) {
+  return text.slice(index).match(/^제\s*\d+\s*조(?:의\s*\d+)?/)?.[0].length ?? 0;
+}
+
 function pageBlocks(lines: Line[]) {
   if (!lines.length) return [] as Array<{ page: number; lines: string[]; marked: boolean; heading: boolean }>;
   const heights = lines.map((line) => line.height).sort((a, b) => a - b);
@@ -279,6 +303,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
     if (textLength < Math.max(80, pdf.numPages * 20)) throw new Error("OCR로도 글자를 충분히 읽지 못했어요. 더 선명한 PDF로 다시 시도해 주세요.");
   }
+  pages = splitExplicitArticleLines(pages);
 
   const edgeCounts = new Map<string, number>();
   for (const lines of pages) for (const line of [...lines.slice(0, 2), ...lines.slice(-2)]) edgeCounts.set(compact(line.text), (edgeCounts.get(compact(line.text)) ?? 0) + 1);
@@ -287,14 +312,16 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`)))).map((block, index) => ({ ...block, id: `P${String(block.page).padStart(3, "0")}_B${String(index + 1).padStart(4, "0")}` }));
   const sourceBlockMap = new Map(blocks.map((block) => [block.id, normalize(block.lines.join(" "))]));
 
-  const merged: Array<{ page: number; endPage: number; text: string; sourceBlockIds: string[]; marked: boolean; heading: boolean }> = [];
+  const merged: Array<{ page: number; endPage: number; text: string; sourceBlockIds: string[]; sourceArticle: string | null; marked: boolean; heading: boolean }> = [];
   let activeListParent = -1;
   let activeListParentDepth = 99;
+  let activeArticle: string | null = null;
   for (const block of blocks) {
     const text = normalize(block.lines.join(" "));
     if (!text || text.length < 4 || isDecorativeOrLayoutOnly(text) || isNonClauseBoilerplate(text)) continue;
     const marker = text.match(markerPattern)?.[1] ?? "";
     const beginsArticle = articleMarkerPattern.test(marker);
+    if (beginsArticle) activeArticle = marker.replace(/\s+/g, "");
     const beginsChild = childMarkerPattern.test(marker) && !beginsArticle;
     if (activeListParent >= 0) {
       const parent = merged[activeListParent];
@@ -313,7 +340,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
       previous.text = normalize(`${previous.text} ${text}`); previous.endPage = block.page; previous.sourceBlockIds.push(block.id);
       if (listPreamblePattern.test(previous.text)) { activeListParent = merged.length - 1; activeListParentDepth = markerDepth(previous.text.match(markerPattern)?.[1] ?? ""); }
     } else {
-      merged.push({ page: block.page, endPage: block.page, text, sourceBlockIds: [block.id], marked: block.marked, heading: block.heading });
+      merged.push({ page: block.page, endPage: block.page, text, sourceBlockIds: [block.id], sourceArticle: activeArticle, marked: block.marked, heading: block.heading });
       if (listPreamblePattern.test(text)) { activeListParent = merged.length - 1; activeListParentDepth = markerDepth(marker); }
     }
   }
@@ -332,7 +359,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const sourceText = block.sourceBlockIds.map((blockId) => sourceBlockMap.get(blockId)).filter((value): value is string => !!value).join(" ");
     if (!sourceText || isIncompleteText(sourceText)) continue;
     const sourceClauseId = `${marker}_${textHash.slice(0, 12).toUpperCase()}`;
-    clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, text: sourceText, original: sourceText.slice(0, 1200), sourceBlockIds: block.sourceBlockIds, sourceClauseIds: [sourceClauseId], ...risk });
+    clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, sourceArticle: block.sourceArticle, text: sourceText, original: sourceText.slice(0, 1200), sourceBlockIds: block.sourceBlockIds, sourceClauseIds: [sourceClauseId], ...risk });
   }
   if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
   return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };

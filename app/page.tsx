@@ -5,7 +5,7 @@ import CostCalculator from "./cost-calculator";
 
 type Status = "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
-type Item = { id: string; marker: string; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: RawClause["effects"] };
+type Item = { id: string; marker: string; sourceArticle: string | null; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: RawClause["effects"] };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
 type ClauseExplanation = { clauseId: string; relevant: boolean; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string };
 type Citation = { original: string; page: number | null; relevance: string };
@@ -260,6 +260,7 @@ function buildDuplicateCandidateGroups(items: Item[]) {
   };
   const compact = items.map((item) => ({ title: similarityText(`${item.title} ${item.core}`), effect: similarityText(item.impact) }));
   for (let left = 0; left < items.length; left++) for (let right = left + 1; right < items.length; right++) {
+    if (items[left].sourceArticle && items[right].sourceArticle && items[left].sourceArticle !== items[right].sourceArticle) continue;
     if (!items[left].marker.startsWith("BLOCK") && !items[right].marker.startsWith("BLOCK")) continue;
     const titleScore = diceSimilarity(compact[left].title, compact[right].title);
     const effectScore = diceSimilarity(compact[left].effect, compact[right].effect);
@@ -282,6 +283,8 @@ function mergeSimilarItems(items: Item[], decisions: DuplicateDecision[]) {
   for (const decision of decisions) {
     const members = [decision.keepId, ...decision.mergeIds].map((id) => byId.get(id)).filter((item): item is Item => !!item && !removed.has(item.id));
     if (members.length < 2 || members.filter((item) => !item.marker.startsWith("BLOCK")).length > 1) continue;
+    const articles = new Set(members.map((item) => item.sourceArticle).filter(Boolean));
+    if (articles.size > 1) continue;
     const effectKeys = members.map((item) => [...item.effects].sort().join("|"));
     if (new Set(effectKeys).size !== 1) continue;
     const normalizedSources = members.map((item) => similarityText(item.original));
@@ -386,7 +389,7 @@ export default function Home() {
         // 정규식 판정과 다르다는 이유만으로 전체 분석을 중단하지 않습니다.
         if (!explanation.relevant) return [];
         if (hasUnsupportedInference(explanation, clause.original)) return [];
-        return [{ id: clause.id, marker: clause.marker, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
+        return [{ id: clause.id, marker: clause.marker, sourceArticle: clause.sourceArticle, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
       });
       // coverage 검사는 '실제 카드로 채택된 의미'를 기준선으로 잡고,
       // 이후 중복 병합 과정에서 그 의미가 사라지는지만 확인합니다.
