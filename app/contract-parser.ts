@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-17_full-evidence-1_spacing-1_body-regions-1_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-4_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-18_legal-citations-1_full-evidence-1_spacing-1_body-regions-1_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-4_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
@@ -323,7 +323,10 @@ function pageBlocks(lines: Line[]) {
     if (/^\d{1,4}$/.test(line.text)) continue;
     const previous = lines[index - 1];
     const gap = previous ? previous.y - line.y : 0;
-    const marked = boundaryPattern.test(line.text);
+    // A wrapped legal citation such as "법 / 제21조의3 제1항..." can begin a
+    // visual line with 제N조, but it is not a new contract article heading.
+    const wrappedLegalCitation = /^제\s*\d+\s*조(?:의\s*\d+)?\s+제\s*\d+\s*항(?:\s+제\s*\d+\s*호)?/.test(line.text);
+    const marked = boundaryPattern.test(line.text) && !wrappedLegalCitation;
     const looksLikeHeading = line.text.length <= 45 && !/[.!?。]$/.test(line.text) && gap > median * 1.4;
     if (!blocks.length || marked || looksLikeHeading || gap > median * 2.2) blocks.push({ page: line.page, lines: [line.text], marked, heading: looksLikeHeading });
     else blocks[blocks.length - 1].lines.push(line.text);
