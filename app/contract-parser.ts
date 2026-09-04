@@ -1,7 +1,7 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-15_body-regions-1_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-4_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-16_spacing-1_body-regions-1_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-4_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
@@ -24,6 +24,19 @@ function cleanExtractedText(text: string) {
   // 깨진 조각을 AI 입력에 남겨 허위 설명이 만들어지는 것보다 확인 가능한 글자만 보존합니다.
   const cleaned = normalize(normalized.replace(brokenGlyphPattern, " "));
   return cleaned.length >= 4 ? cleaned : "";
+}
+function repairPdfWordSpacing(text: string) {
+  return normalize(text)
+    .replace(/통\s+지/g, "통지")
+    .replace(/내\s+용/g, "내용")
+    .replace(/동\s+의/g, "동의")
+    .replace(/확\s+인/g, "확인")
+    .replace(/제\s+기/g, "제기")
+    .replace(/개\s+별/g, "개별")
+    .replace(/불\s+리한/g, "불리한")
+    .replace(/정해\s+진/g, "정해진")
+    .replace(/받\s+은/g, "받은")
+    .replace(/있으\s+므\s+로/g, "있으므로");
 }
 function isDecorativeOrLayoutOnly(text: string) {
   const value = normalize(text);
@@ -192,10 +205,19 @@ function groupPositionedLines(items: PositionedText[], page: number) {
       existing.height = Math.max(existing.height, item.height);
     } else groups.push({ page, x: item.x, xEnd: item.xEnd, y: item.y, height: item.height, text: "", region: "body", fragments: [item] });
   }
-  return groups.map(({ fragments, ...line }) => ({
-    ...line,
-    text: normalize(fragments.sort((a, b) => a.x - b.x).map((fragment) => fragment.text).join(" ")),
-  })).sort((a, b) => b.y - a.y || a.x - b.x);
+  return groups.map(({ fragments, ...line }) => {
+    const ordered = fragments.sort((a, b) => a.x - b.x);
+    let text = ordered[0]?.text ?? "";
+    for (let index = 1; index < ordered.length; index++) {
+      const previous = ordered[index - 1];
+      const current = ordered[index];
+      const gap = current.x - previous.xEnd;
+      const naturalWordGap = Math.max(.8, Math.min(previous.height, current.height) * .16);
+      const separator = gap > naturalWordGap && !/^[,.;:!?%)\]}>〉》」』]/.test(current.text) ? " " : "";
+      text += `${separator}${current.text}`;
+    }
+    return { ...line, text: repairPdfWordSpacing(text) };
+  }).sort((a, b) => b.y - a.y || a.x - b.x);
 }
 
 function detectColumnSplit(items: PositionedText[], pageWidth: number) {
