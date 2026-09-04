@@ -1,14 +1,15 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-13_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-22_korean-only-1_ocr-2_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-14_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-3_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
 export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; sourceArticle: string | null; text: string; original: string; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
 export type BasicInfo = { label: string; value: string; explanation: string; page: number };
 export type DocumentNotice = { text: string; page: number };
-type Line = { page: number; y: number; height: number; text: string };
+type Line = { page: number; x: number; xEnd: number; y: number; height: number; text: string };
+type PositionedText = { text: string; x: number; xEnd: number; y: number; height: number };
 
 const boundaryPattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])(?:\s|$)/;
 const markerPattern = /^(제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])/;
@@ -180,18 +181,83 @@ function classify(text: string): { signals: RiskSignals; effects: EffectCode[]; 
   return { signals, effects, level: levelFromEffects(effects) };
 }
 
-function groupLines(items: Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, page: number) {
-  const groups: Line[] = [];
-  for (const item of items) {
+function groupPositionedLines(items: PositionedText[], page: number) {
+  const groups: Array<Line & { fragments: PositionedText[] }> = [];
+  for (const item of [...items].sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const existing = groups.find((line) => Math.abs(line.y - item.y) <= Math.max(2, Math.max(line.height, item.height) * .28));
+    if (existing) {
+      existing.fragments.push(item);
+      existing.x = Math.min(existing.x, item.x);
+      existing.xEnd = Math.max(existing.xEnd, item.xEnd);
+      existing.height = Math.max(existing.height, item.height);
+    } else groups.push({ page, x: item.x, xEnd: item.xEnd, y: item.y, height: item.height, text: "", fragments: [item] });
+  }
+  return groups.map(({ fragments, ...line }) => ({
+    ...line,
+    text: normalize(fragments.sort((a, b) => a.x - b.x).map((fragment) => fragment.text).join(" ")),
+  })).sort((a, b) => b.y - a.y || a.x - b.x);
+}
+
+function detectColumnSplit(items: PositionedText[], pageWidth: number) {
+  if (items.length < 24 || pageWidth <= 0) return null;
+  const yTolerance = Math.max(2, items.map((item) => item.height).sort((a, b) => a - b)[Math.floor(items.length / 2)] * .35);
+  const rows: number[] = [];
+  for (const item of items) if (!rows.some((y) => Math.abs(y - item.y) <= yTolerance)) rows.push(item.y);
+  let best: { split: number; score: number } | null = null;
+  for (let ratio = .42; ratio <= .58; ratio += .01) {
+    const split = pageWidth * ratio;
+    // Measure the stable vertical whitespace itself. A wide band incorrectly
+    // treats text ending at either column edge as crossing the gutter.
+    const gutterHalfWidth = Math.max(1, pageWidth * .002);
+    const leftChars = items.filter((item) => item.xEnd < split - gutterHalfWidth).reduce((sum, item) => sum + item.text.length, 0);
+    const rightChars = items.filter((item) => item.x > split + gutterHalfWidth).reduce((sum, item) => sum + item.text.length, 0);
+    const crossedRows = rows.filter((y) => items.some((item) => Math.abs(item.y - y) <= yTolerance && item.x < split + gutterHalfWidth && item.xEnd > split - gutterHalfWidth)).length;
+    const crossingRatio = crossedRows / Math.max(rows.length, 1);
+    const wideGapRows = rows.filter((y) => {
+      const row = items.filter((item) => Math.abs(item.y - y) <= yTolerance);
+      const leftEdges = row.filter((item) => item.xEnd <= split).map((item) => item.xEnd);
+      const rightEdges = row.filter((item) => item.x >= split).map((item) => item.x);
+      if (!leftEdges.length || !rightEdges.length) return false;
+      return Math.min(...rightEdges) - Math.max(...leftEdges) >= Math.max(8, pageWidth * .015);
+    }).length;
+    const wideGapRatio = wideGapRows / Math.max(rows.length, 1);
+    const balance = Math.min(leftChars, rightChars) / Math.max(leftChars, rightChars, 1);
+    if (leftChars < 120 || rightChars < 120 || balance < .28 || crossingRatio > .12 || wideGapRatio < .1) continue;
+    const score = balance + wideGapRatio - crossingRatio * 2;
+    if (!best || score > best.score) best = { split, score };
+  }
+  return best?.split ?? null;
+}
+
+function groupLines(items: Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, page: number, pageWidth: number) {
+  const positioned = items.flatMap((item) => {
     const text = cleanExtractedText(item.str ?? "");
-    if (!text || isDecorativeOrLayoutOnly(text)) continue;
+    if (!text || isDecorativeOrLayoutOnly(text)) return [];
+    const x = item.transform?.[4] ?? 0;
     const y = item.transform?.[5] ?? 0;
     const height = Math.max(item.height ?? Math.abs(item.transform?.[3] ?? 10), 1);
-    const existing = groups.find((line) => Math.abs(line.y - y) <= Math.max(2, height * .28));
-    if (existing) existing.text = normalize(`${existing.text} ${text}`);
-    else groups.push({ page, y, height, text });
-  }
-  return groups.sort((a, b) => b.y - a.y);
+    const width = Math.max(item.width ?? text.length * height * .55, 1);
+    return [{ text, x, xEnd: x + width, y, height }];
+  });
+  const split = detectColumnSplit(positioned, pageWidth);
+  if (!split) return groupPositionedLines(positioned, page);
+
+  const gutterHalfWidth = Math.max(1, pageWidth * .002);
+  const spanning = positioned.filter((item) => item.x < split + gutterHalfWidth && item.xEnd > split - gutterHalfWidth);
+  const columnItems = positioned.filter((item) => !spanning.includes(item));
+  const left = columnItems.filter((item) => (item.x + item.xEnd) / 2 < split);
+  const right = columnItems.filter((item) => (item.x + item.xEnd) / 2 >= split);
+  const bodyTop = Math.max(...columnItems.map((item) => item.y));
+  const bodyBottom = Math.min(...columnItems.map((item) => item.y));
+  const top = spanning.filter((item) => item.y >= bodyTop);
+  const bottom = spanning.filter((item) => item.y <= bodyBottom);
+  const middle = spanning.filter((item) => item.y < bodyTop && item.y > bodyBottom);
+  return [
+    ...groupPositionedLines(top, page),
+    ...groupPositionedLines([...left, ...middle.filter((item) => (item.x + item.xEnd) / 2 < split)], page),
+    ...groupPositionedLines([...right, ...middle.filter((item) => (item.x + item.xEnd) / 2 >= split)], page),
+    ...groupPositionedLines(bottom, page),
+  ];
 }
 
 function splitExplicitArticleLines(pages: Line[][]) {
@@ -264,21 +330,80 @@ function isIncompleteText(text: string) {
 
 async function readScannedPdf(pdf: pdfjs.PDFDocumentProxy, onProgress?: (currentPage: number, totalPages: number) => void) {
   const pages: Line[][] = [];
+
+  const encodeForOcr = (canvas: HTMLCanvasElement) => {
+    const qualities = [.88, .8, .72];
+    for (const quality of qualities) {
+      const image = canvas.toDataURL("image/jpeg", quality).replace(/^data:image\/jpeg;base64,/, "");
+      if (image.length <= 650_000) return image;
+    }
+    return null;
+  };
+
+  const ocrImage = async (image: string, pageNumber: number, part?: string) => {
+    const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: pageNumber, part, image }) });
+    const result = await response.json() as { page?: number; text?: string; error?: string };
+    if (!response.ok) throw new Error(result.error || `${pageNumber}쪽의 글자를 읽지 못했습니다.`);
+    return result.text?.trim() ?? "";
+  };
+
+  const mergeOcrParts = (parts: string[]) => {
+    const merged: string[] = [];
+    for (const part of parts) {
+      const next = part.split(/\r?\n/).map(cleanExtractedText).filter(Boolean);
+      let duplicateCount = 0;
+      for (let size = Math.min(12, merged.length, next.length); size > 0; size--) {
+        if (merged.slice(-size).every((line, index) => compact(line) === compact(next[index]))) {
+          duplicateCount = size;
+          break;
+        }
+      }
+      merged.push(...next.slice(duplicateCount));
+    }
+    return merged;
+  };
+
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.35 });
+    // Dense scanned contracts need enough pixels for small Korean glyphs. If the
+    // resulting JPEG is too large, retain that resolution and OCR overlapping tiles.
+    const viewport = page.getViewport({ scale: 2.2 });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("스캔 페이지 이미지를 만들지 못했습니다.");
     context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvas, canvasContext: context, viewport }).promise;
-    const image = canvas.toDataURL("image/jpeg", .7).replace(/^data:image\/jpeg;base64,/, "");
-    const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: pageNumber, image }) });
-    const result = await response.json() as { page?: number; text?: string; error?: string };
-    if (!response.ok || !result.text) throw new Error(result.error || `${pageNumber}쪽의 글자를 읽지 못했습니다.`);
-    const lines = result.text.split(/\r?\n/).map(cleanExtractedText).filter(Boolean);
-    pages.push(lines.map((text, index) => ({ page: pageNumber, y: (lines.length - index) * 12, height: 10, text })));
+    const fullImage = encodeForOcr(canvas);
+    const recognized: string[] = [];
+    if (fullImage) {
+      recognized.push(await ocrImage(fullImage, pageNumber));
+    } else {
+      let encodedTiles: string[] | null = null;
+      for (const tileCount of [2, 4]) {
+        const overlap = Math.min(80, Math.round(canvas.height * .04));
+        const tileHeight = Math.ceil((canvas.height + overlap * (tileCount - 1)) / tileCount);
+        const candidates: string[] = [];
+        for (let part = 0; part < tileCount; part++) {
+          const sourceY = Math.min(part * (tileHeight - overlap), canvas.height - tileHeight);
+          const tile = document.createElement("canvas");
+          tile.width = canvas.width; tile.height = tileHeight;
+          const tileContext = tile.getContext("2d", { alpha: false });
+          if (!tileContext) throw new Error("스캔 페이지 이미지를 나누지 못했습니다.");
+          tileContext.fillStyle = "#fff"; tileContext.fillRect(0, 0, tile.width, tile.height);
+          tileContext.drawImage(canvas, 0, sourceY, canvas.width, tileHeight, 0, 0, tile.width, tile.height);
+          const tileImage = encodeForOcr(tile);
+          tile.width = 1; tile.height = 1;
+          if (!tileImage) { candidates.length = 0; break; }
+          candidates.push(tileImage);
+        }
+        if (candidates.length === tileCount) { encodedTiles = candidates; break; }
+      }
+      if (!encodedTiles) throw new Error(`${pageNumber}쪽 이미지의 용량을 OCR 제한 안으로 줄이지 못했습니다.`);
+      for (let part = 0; part < encodedTiles.length; part++) recognized.push(await ocrImage(encodedTiles[part], pageNumber, `${part + 1}/${encodedTiles.length}`));
+    }
+    const lines = mergeOcrParts(recognized);
+    pages.push(lines.map((text, index) => ({ page: pageNumber, x: 0, xEnd: viewport.width, y: (lines.length - index) * 12, height: 10, text })));
     canvas.width = 1; canvas.height = 1; page.cleanup(); onProgress?.(pageNumber, pdf.numPages);
   }
   return pages;
@@ -293,7 +418,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; height?: number; hasEOL?: boolean }>, pageNumber));
+    pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, pageNumber, page.view[2] - page.view[0]));
     onPageProgress?.(pageNumber, pdf.numPages);
   }
   let textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);

@@ -126,7 +126,7 @@ function TermHelp({ term, definition }: GlossaryTerm) {
 }
 
 function FinancialText({ text, glossary = [], highlightOnly, firstOccurrenceOnly = false }: { text: string; glossary?: GlossaryTerm[]; highlightOnly?: Set<string>; firstOccurrenceOnly?: boolean }) {
-  const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람"]);
+  const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람", "사용자", "가입자", "적립금"]);
   const definitions = new Map(glossary
     .filter(({ term, definition }) => {
       const normalized = term.trim();
@@ -323,7 +323,8 @@ export default function Home() {
       const summary = priorityCount ? `계약서에서 확인한 ${items.length}개 항목 중 먼저 확인할 위험·주의 내용은 ${priorityCount}개입니다.` : `계약서에서 확인한 ${items.length}개 항목을 위험도와 중요도에 따라 정리했습니다.`;
       const uncovered = auditCoverage(expectedSourceClauseIds, items);
       if (uncovered.length) throw new Error("분석 결과를 정리하는 과정에서 일부 근거가 누락됐어요. 다시 분석해 주세요.");
-      const glossary = [...new Map(glossaryParts.map((entry) => [entry.term, entry])).values()];
+      const excludedGlossaryTerms = new Set(["사용자", "가입자", "적립금"]);
+      const glossary = [...new Map(glossaryParts.filter((entry) => !excludedGlossaryTerms.has(entry.term.trim())).map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType, summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
       setAnalysis(data); setStatus("done");

@@ -2,6 +2,7 @@ import { CONTRACT_QA_PROMPT } from "../../ai-prompts";
 import { callGemini, geminiText, type GeminiPayload } from "../gemini";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const excludedGlossaryTerms = new Set(["사용자", "가입자", "적립금"]);
 
 const answerSchema = {
   type: "object", additionalProperties: false,
@@ -55,5 +56,9 @@ export async function POST(request: Request) {
   const payload = await response.json() as GeminiPayload;
   const outputText = geminiText(payload);
   if (!outputText) return jsonError("답변 결과를 읽지 못했습니다.", 502);
-  try { return Response.json(JSON.parse(outputText)); } catch { return jsonError("답변 결과 형식이 올바르지 않습니다.", 502); }
+  try {
+    const result = JSON.parse(outputText) as { glossary?: Array<{ term?: string; definition?: string }> } & Record<string, unknown>;
+    result.glossary = (result.glossary ?? []).filter(({ term }) => !!term && !excludedGlossaryTerms.has(term.trim()));
+    return Response.json(result);
+  } catch { return jsonError("답변 결과 형식이 올바르지 않습니다.", 502); }
 }

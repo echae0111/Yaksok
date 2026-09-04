@@ -22,6 +22,7 @@ const explanationSchema = (clauseCount: number) => ({
 } as const);
 
 type InputClause = { id: string; page: number; marker: string; text: string };
+const excludedGlossaryTerms = new Set(["사용자", "가입자", "적립금"]);
 function jsonError(message: string, status: number) { return Response.json({ error: message }, { status }); }
 function parseResetSeconds(value: string | null) {
   if (!value) return 0;
@@ -66,7 +67,11 @@ export async function POST(request: Request) {
     if (result.explanations.length !== clauses.length) return jsonError("일부 조항 설명이 누락됐습니다.", 502);
     return Response.json({
       explanations: result.explanations.map((explanation, index) => ({ ...explanation, clauseId: clauses[index].id })),
-      glossary: result.glossary,
+      glossary: result.glossary.filter((entry): entry is { term: string; definition: string } => {
+        if (!entry || typeof entry !== "object") return false;
+        const term = "term" in entry && typeof entry.term === "string" ? entry.term.trim() : "";
+        return !!term && !excludedGlossaryTerms.has(term) && "definition" in entry && typeof entry.definition === "string";
+      }),
     });
   } catch (reason) {
     console.error("Clause explanation failed", reason);
