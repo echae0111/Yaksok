@@ -1,14 +1,14 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 
-export const ANALYSIS_VERSION = "parser-14_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-3_gemini-2.5-flash";
+export const ANALYSIS_VERSION = "parser-15_body-regions-1_column-layout-1_article-boundaries-2_no-cross-clause-merge-1_semantic-coverage-2_source-lineage-3_effects-2_prompt-23_korean-only-1_ocr-4_gemini-2.5-flash";
 
 export type RiskSignals = { immediateRepayment: boolean; terminationOrExclusion: boolean; additionalCost: boolean; creditImpact: boolean; rightRestriction: boolean; deadline: boolean; consumerDuty: boolean };
 export type EffectCode = "CONTRACT_TERMINATION" | "TERMINATION_RIGHT" | "ACCELERATION" | "IMMEDIATE_REPAYMENT" | "LOAN_SUSPENSION" | "LOAN_RESTRICTION" | "DEFAULT_INTEREST" | "DIRECT_FINANCIAL_LOSS" | "DIRECT_DAMAGE_LIABILITY" | "CANCELLATION_RESTRICTION" | "CANCELLATION_DEADLINE" | "CANCELLATION_EXCEPTION" | "MODIFICATION_RESTRICTION" | "DEADLINE_TO_NOTIFY" | "RIGHT_TO_CLAIM_RESTRICTED" | "CONSENT_REQUIRED" | "CORRECTION_RESTRICTION" | "OPERATION_SUSPENSION" | "OBLIGATION_SURVIVES_TERMINATION" | "PAYMENT_OBLIGATION_CONTINUES" | "CONTRACT_CONTINUATION" | "PAYMENT_ALLOCATION" | "PAYMENT_OBLIGATION" | "NOTICE_OBLIGATION" | "ASSIGNMENT_PROCEDURE" | "REPRESENTATION" | "CORE_OPERATIONAL_PROCEDURE" | "DEFINITION" | "PURPOSE" | "CONFIDENTIALITY" | "JURISDICTION" | "GENERAL_COOPERATION" | "REFERENCE_TERMS" | "GENERAL_TERM";
 export type RawClause = { id: string; page: number; pageEnd: number; order: number; marker: string; sourceArticle: string | null; text: string; original: string; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: EffectCode[]; signals: RiskSignals; level: "danger" | "caution" | "important" | "general" };
 export type BasicInfo = { label: string; value: string; explanation: string; page: number };
 export type DocumentNotice = { text: string; page: number };
-type Line = { page: number; x: number; xEnd: number; y: number; height: number; text: string };
+type Line = { page: number; x: number; xEnd: number; y: number; height: number; text: string; region: "body" | "margin" };
 type PositionedText = { text: string; x: number; xEnd: number; y: number; height: number };
 
 const boundaryPattern = /^(?:제\s*\d+\s*조(?:의\s*\d+)?|제\s*\d+\s*항|[①-⑳]|\(?\d+\)|\d+[.)]|[가-힣][.)])(?:\s|$)/;
@@ -190,7 +190,7 @@ function groupPositionedLines(items: PositionedText[], page: number) {
       existing.x = Math.min(existing.x, item.x);
       existing.xEnd = Math.max(existing.xEnd, item.xEnd);
       existing.height = Math.max(existing.height, item.height);
-    } else groups.push({ page, x: item.x, xEnd: item.xEnd, y: item.y, height: item.height, text: "", fragments: [item] });
+    } else groups.push({ page, x: item.x, xEnd: item.xEnd, y: item.y, height: item.height, text: "", region: "body", fragments: [item] });
   }
   return groups.map(({ fragments, ...line }) => ({
     ...line,
@@ -229,7 +229,15 @@ function detectColumnSplit(items: PositionedText[], pageWidth: number) {
   return best?.split ?? null;
 }
 
-function groupLines(items: Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, page: number, pageWidth: number) {
+function isMarginTemplate(line: Line, pageHeight: number) {
+  const text = normalize(line.text);
+  const templateText = /^(?:\d{1,2}-\d{2}-\d{3,5}(?:\([^)]*\))?|준법감시인|심의필|보존본|보관용|고객용)|(?:약관[-\s]*\d+호|\d{4}[./-]\d{1,2}\s*개정)/.test(text);
+  if (templateText) return true;
+  const inMargin = line.y <= pageHeight * .075 || line.y >= pageHeight * .94;
+  return inMargin && !boundaryPattern.test(text);
+}
+
+function groupLines(items: Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, page: number, pageWidth: number, pageHeight: number) {
   const positioned = items.flatMap((item) => {
     const text = cleanExtractedText(item.str ?? "");
     if (!text || isDecorativeOrLayoutOnly(text)) return [];
@@ -240,7 +248,7 @@ function groupLines(items: Array<{ str?: string; transform?: number[]; width?: n
     return [{ text, x, xEnd: x + width, y, height }];
   });
   const split = detectColumnSplit(positioned, pageWidth);
-  if (!split) return groupPositionedLines(positioned, page);
+  if (!split) return groupPositionedLines(positioned, page).map((line) => ({ ...line, region: isMarginTemplate(line, pageHeight) ? "margin" as const : "body" as const }));
 
   const gutterHalfWidth = Math.max(1, pageWidth * .002);
   const spanning = positioned.filter((item) => item.x < split + gutterHalfWidth && item.xEnd > split - gutterHalfWidth);
@@ -257,7 +265,7 @@ function groupLines(items: Array<{ str?: string; transform?: number[]; width?: n
     ...groupPositionedLines([...left, ...middle.filter((item) => (item.x + item.xEnd) / 2 < split)], page),
     ...groupPositionedLines([...right, ...middle.filter((item) => (item.x + item.xEnd) / 2 >= split)], page),
     ...groupPositionedLines(bottom, page),
-  ];
+  ].map((line) => ({ ...line, region: isMarginTemplate(line, pageHeight) ? "margin" as const : "body" as const }));
 }
 
 function splitExplicitArticleLines(pages: Line[][]) {
@@ -403,7 +411,7 @@ async function readScannedPdf(pdf: pdfjs.PDFDocumentProxy, onProgress?: (current
       for (let part = 0; part < encodedTiles.length; part++) recognized.push(await ocrImage(encodedTiles[part], pageNumber, `${part + 1}/${encodedTiles.length}`));
     }
     const lines = mergeOcrParts(recognized);
-    pages.push(lines.map((text, index) => ({ page: pageNumber, x: 0, xEnd: viewport.width, y: (lines.length - index) * 12, height: 10, text })));
+    pages.push(lines.map((text, index) => ({ page: pageNumber, x: 0, xEnd: viewport.width, y: (lines.length - index) * 12, height: 10, text, region: "body" as const })));
     canvas.width = 1; canvas.height = 1; page.cleanup(); onProgress?.(pageNumber, pdf.numPages);
   }
   return pages;
@@ -418,7 +426,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, pageNumber, page.view[2] - page.view[0]));
+    pages.push(groupLines(content.items as Array<{ str?: string; transform?: number[]; width?: number; height?: number; hasEOL?: boolean }>, pageNumber, page.view[2] - page.view[0], page.view[3] - page.view[1]));
     onPageProgress?.(pageNumber, pdf.numPages);
   }
   let textLength = pages.flat().reduce((sum, line) => sum + line.text.length, 0);
@@ -434,7 +442,7 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   for (const lines of pages) for (const line of [...lines.slice(0, 2), ...lines.slice(-2)]) edgeCounts.set(compact(line.text), (edgeCounts.get(compact(line.text)) ?? 0) + 1);
   const repeated = new Set([...edgeCounts].filter(([key, count]) => key.length > 2 && count >= Math.max(3, Math.ceil(pdf.numPages * .45))).map(([key]) => key));
   const separated = extractNonClauses(pages);
-  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`)))).map((block, index) => ({ ...block, id: `P${String(block.page).padStart(3, "0")}_B${String(index + 1).padStart(4, "0")}` }));
+  const blocks = pages.flatMap((lines) => pageBlocks(lines.filter((line) => line.region === "body" && !repeated.has(compact(line.text)) && !separated.excluded.has(`${line.page}:${compact(line.text)}`)))).map((block, index) => ({ ...block, id: `P${String(block.page).padStart(3, "0")}_B${String(index + 1).padStart(4, "0")}` }));
   const sourceBlockMap = new Map(blocks.map((block) => [block.id, normalize(block.lines.join(" "))]));
 
   const merged: Array<{ page: number; endPage: number; text: string; sourceBlockIds: string[]; sourceArticle: string | null; marked: boolean; heading: boolean }> = [];
