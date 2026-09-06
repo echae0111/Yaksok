@@ -18,7 +18,7 @@ const financeQuizzes = [
   { question: "중도상환수수료는 언제 생길 수 있을까요?", choices: ["대출금을 약속보다 일찍 갚을 때", "대출금을 늦게 갚을 때", "계좌를 새로 만들 때"], answer: 0, explanation: "대출금을 계약 기간보다 일찍 갚을 때 생길 수 있는 비용이에요. 적용 기간과 계산 방법을 확인해야 해요." },
   { question: "연체이자는 무엇일까요?", choices: ["돈을 늦게 갚을 때 추가로 붙는 이자", "예금에 붙는 이자", "대출 신청 수수료"], answer: 0, explanation: "정해진 날까지 돈을 내지 못하면 원래 이자 외에 추가 부담이 생길 수 있어요." },
   { question: "고정금리의 뜻으로 맞는 것은?", choices: ["계약에서 정한 기간 동안 금리가 고정돼요", "매달 금리가 무조건 내려가요", "원금을 갚지 않아도 돼요"], answer: 0, explanation: "고정금리는 약속한 기간 동안 적용 금리가 바뀌지 않아 이자 부담을 예상하기 쉬워요." },
-  { question: "자동 연장을 막고 싶다면 가장 먼저 볼 것은?", choices: ["계약서의 연장 거절 통지 기한", "금융회사 광고", "계약서의 글자 크기"], answer: 0, explanation: "자동 연장 조항에는 언제까지 거절 의사를 알려야 하는지가 적혀 있으므로 그 기한이 중요해요." },
+  { question: "자동 연장을 막고 싶다면 가장 먼저 볼 것은?", choices: ["계약서의 연장 거절 통지 기한", "금융회사 광고", "계약서의 글자 크기"], answer: 0, explanation: "자동 연장 내용에는 언제까지 거절 의사를 알려야 하는지가 적혀 있으므로 그 기한이 중요해요." },
   { question: "대출의 원금은 무엇일까요?", choices: ["처음 빌린 돈 자체", "연체할 때 붙는 비용", "매년 내는 카드 연회비"], answer: 0, explanation: "원금은 이자나 수수료를 제외하고 금융회사에서 실제로 빌린 돈이에요." },
   { question: "거치기간에는 보통 무엇을 확인해야 할까요?", choices: ["원금을 갚지 않고 이자만 내는 기간인지", "신용카드를 못 쓰는 기간인지", "계약서를 보관하는 기간인지"], answer: 0, explanation: "거치기간에는 원금 상환을 미루고 이자만 내는 경우가 많아요. 종료 뒤 상환액이 커질 수 있어 조건을 확인해야 해요." },
   { question: "만기일시상환 방식은 무엇일까요?", choices: ["원금을 매달 똑같이 나눠 갚는 방식", "만기까지 이자를 내다가 원금을 마지막에 한꺼번에 갚는 방식", "이자를 전혀 내지 않는 방식"], answer: 1, explanation: "만기일시상환은 대출 기간 중 주로 이자를 내고, 만기일에 원금을 한꺼번에 갚는 방식이에요." },
@@ -61,7 +61,7 @@ function formatElapsed(seconds: number) {
 }
 function formatProgressCount(progress: AnalysisProgress) {
   if (!progress.total) return "문서 확인 중";
-  return progress.phase.startsWith("PDF ") ? `${progress.completed} / ${progress.total}쪽` : `${progress.completed} / ${progress.total}개 조항`;
+  return progress.phase.startsWith("PDF ") ? `${progress.completed} / ${progress.total}쪽` : `내용 ${progress.completed} / ${progress.total}개`;
 }
 
 async function readApiJson<T>(response: Response): Promise<T & { error?: string }> {
@@ -77,8 +77,8 @@ async function requestClauseBatch(clauses: RawClause[]) {
   const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clauses: input }) });
   const data = await readApiJson<{ explanations: ClauseExplanation[]; glossary: GlossaryTerm[]; errorCode?: string; retryAfterSeconds?: number }>(response);
   if (response.status === 429) throw new RateLimitError(data.error || "분석 요청이 잠시 제한됐습니다.", data.retryAfterSeconds ?? 0, data.errorCode === "quota_exhausted");
-  if (!response.ok) throw new Error(data.error || "계약서 조항을 설명하지 못했어요.");
-  if (data.explanations.length !== clauses.length) throw new Error("일부 조항 설명이 누락됐어요.");
+  if (!response.ok) throw new Error(data.error || "계약서 내용을 설명하지 못했어요.");
+  if (data.explanations.length !== clauses.length) throw new Error("일부 내용 설명이 누락됐어요.");
   return data;
 }
 
@@ -126,7 +126,12 @@ function TermHelp({ term, definition }: GlossaryTerm) {
   </span>;
 }
 
+function explanationWording(text: string) { return text.replaceAll("조항", "내용"); }
+
 function FinancialText({ text, glossary = [], highlightOnly, firstOccurrenceOnly = false }: { text: string; glossary?: GlossaryTerm[]; highlightOnly?: Set<string>; firstOccurrenceOnly?: boolean }) {
+  text = explanationWording(text);
+  glossary = glossary.map(({ term, definition }) => ({ term: explanationWording(term), definition: explanationWording(definition) }));
+  if (highlightOnly) highlightOnly = new Set([...highlightOnly].map(explanationWording));
   const everydayTerms = new Set(["금융회사", "금융기관", "은행", "회사", "채무자", "계약자", "대출받는 사람", "사용자", "가입자", "적립금"]);
   const definitions = new Map(glossary
     .filter(({ term, definition }) => {
@@ -318,13 +323,13 @@ export default function Home() {
       const cached = await getCachedAnalysis<Analysis>(cacheKey);
       if (cached) { await finishAnalysis(hash, selected, cached); return; }
       const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }), (currentPage, totalPages) => setProgress({ phase: `스캔된 페이지의 글자를 인식하고 있어요 (${currentPage} / ${totalPages}쪽)`, completed: currentPage, total: totalPages, percent: 14 + Math.round((currentPage / totalPages) * 4) }));
-      setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
+      setProgress({ phase: "계약서 내용을 정리하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
       const saved = await Promise.all(parsed.clauses.map(async (clause) => ({ clause, cached: await getCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`) })));
       const explanationMap = new Map(saved.filter((entry) => entry.cached).map((entry) => [entry.clause.id, entry.cached!.explanation]));
       const glossaryParts = saved.flatMap((entry) => entry.cached?.glossary ?? []);
       const pending = saved.filter((entry) => !entry.cached).map((entry) => entry.clause);
       let completedCount = explanationMap.size;
-      setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
+      setProgress({ phase: "내용을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
       const batches = Array.from({ length: Math.ceil(pending.length / CLAUSES_PER_BATCH) }, (_, index) => pending.slice(index * CLAUSES_PER_BATCH, (index + 1) * CLAUSES_PER_BATCH));
       for (let index = 0; index < batches.length; index += BATCH_CONCURRENCY) {
         const group = batches.slice(index, index + BATCH_CONCURRENCY);
@@ -334,11 +339,11 @@ export default function Home() {
           const batch = group[resultIndex];
           for (const clause of batch) {
             const explanation = result.explanations.find((entry) => entry.clauseId === clause.id);
-            if (!explanation) throw new Error("일부 조항 설명이 누락됐어요.");
+            if (!explanation) throw new Error("일부 내용 설명이 누락됐어요.");
             explanationMap.set(clause.id, explanation);
             await setCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`, { explanation, glossary: result.glossary });
             completedCount += 1;
-            setProgress({ phase: "조항을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
+            setProgress({ phase: "내용을 쉬운 말로 설명하고 있어요", completed: completedCount, total: parsed.clauses.length, percent: 18 + Math.round((completedCount / parsed.clauses.length) * 72) });
           }
           glossaryParts.push(...result.glossary);
         }
@@ -346,15 +351,15 @@ export default function Home() {
       const levelOrder = { danger: 0, caution: 1, important: 2, general: 3 };
       const items = [...parsed.clauses].sort((a, b) => levelOrder[a.level] - levelOrder[b.level] || a.order - b.order).flatMap((clause) => {
         const explanation = explanationMap.get(clause.id);
-        if (!explanation) throw new Error("일부 조항 설명이 누락됐어요. 다시 시도해 주세요.");
+        if (!explanation) throw new Error("일부 내용 설명이 누락됐어요. 다시 시도해 주세요.");
         // AI가 문서 안내·서식·상식으로 판정한 항목은 정상적으로 제외합니다.
         // 정규식 판정과 다르다는 이유만으로 전체 분석을 중단하지 않습니다.
         if (!explanation.relevant) return [];
         if (hasUnsupportedInference(explanation, clause.original)) return [];
         return [{ id: clause.id, marker: clause.marker, sourceArticle: clause.sourceArticle, level: clause.level, title: explanation.title, core: explanation.core, easyExplanation: explanation.easyExplanation, impact: explanation.impact, checkPoint: explanation.checkPoint, action: explanation.action, original: clause.original, page: clause.page, sourceBlockIds: clause.sourceBlockIds, sourceClauseIds: clause.sourceClauseIds, effects: clause.effects } satisfies Item];
       });
-      // 계약서에서 별도로 추출된 조항은 내용이 유사해도 서로 합치지 않습니다.
-      // 각 카드와 근거 원문은 언제나 하나의 원본 조항에만 대응합니다.
+      // 계약서에서 별도로 추출된 내용은 내용이 유사해도 서로 합치지 않습니다.
+      // 각 카드와 근거 원문은 언제나 하나의 원본 내용에만 대응합니다.
       const expectedSourceClauseIds = new Set(items.flatMap((item) => item.sourceClauseIds));
       setProgress({ phase: "분석 결과를 마지막으로 정리하고 있어요", completed: parsed.clauses.length, total: parsed.clauses.length, percent: 94 });
       const documentType = parsed.basicInfo.find((info) => info.label === "계약 종류")?.value ?? "금융 계약서 분석 결과";
@@ -418,18 +423,18 @@ export default function Home() {
     {analysis && <>
       <section className="resultSection" id="results" aria-live="polite">
         <div className="sectionHead"><div><span className="miniLabel">실제 분석 결과</span><h2>{analysis.documentType}</h2></div></div>
-        {!!analysis.basicInfo.length && <section className="basicInfoBox"><div className="infoTitle"><span>01</span><div><h3>계약 기본정보</h3><p>금액·이율·날짜 같은 핵심 사실만 모았어요. 전체 조항 수에는 포함하지 않았어요.</p></div></div><div className="infoGrid">{analysis.basicInfo.map((info) => <div className="infoItem" key={`${info.label}-${info.page}`}><b>{info.label}</b><strong>{info.value}</strong><p>{info.explanation}</p></div>)}</div></section>}
-        {!!analysis.notices.length && <aside className="documentNotices"><div><b>문서 안내</b><span>계약 조건이 아니므로 조항 수에서 제외했어요.</span></div>{analysis.notices.map((notice, index) => <p key={`${notice.page}-${index}`}>{notice.text}<small>{notice.page}쪽</small></p>)}</aside>}
+        {!!analysis.basicInfo.length && <section className="basicInfoBox"><div className="infoTitle"><span>01</span><div><h3>계약 기본정보</h3><p>금액·이율·날짜 같은 핵심 사실만 모았어요. 전체 분석 항목 수에는 포함하지 않았어요.</p></div></div><div className="infoGrid">{analysis.basicInfo.map((info) => <div className="infoItem" key={`${info.label}-${info.page}`}><b>{info.label}</b><strong>{info.value}</strong><p>{explanationWording(info.explanation)}</p></div>)}</div></section>}
+        {!!analysis.notices.length && <aside className="documentNotices"><div><b>문서 안내</b><span>계약 조건이 아니므로 분석 항목 수에서 제외했어요.</span></div>{analysis.notices.map((notice, index) => <p key={`${notice.page}-${index}`}>{notice.text}<small>{notice.page}쪽</small></p>)}</aside>}
         <div className="coverageBox"><div className="coverageCheck">✓</div><div><b>계약서 전체 구간 확인 완료</b><p>총 <strong>{analysis.items.length}개 항목</strong>을 확인했습니다.</p><div className="coverageCounts"><span className="danger">🔴 위험 {counts.danger}개</span><span className="caution">🟠 주의 {counts.caution}개</span><span className="important">🟡 중요 {counts.important}개</span><span className="general">⚪ 일반 {counts.general}개</span></div></div></div>
         <div className="summaryBox"><span>한눈에 보기</span><p><FinancialText text={analysis.summary} glossary={analysis.glossary} /></p></div>
-        <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 조항 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
+        <div className="featuredHead"><span>⚠️</span><div><h3>꼭 확인하세요</h3><p>위험 및 주의 내용 {featuredItems.length}개를 모두 보여드려요.</p></div></div>
         <div className="resultList">{featuredItems.map((item, index) => <article className={`resultItem ${item.level}`} key={`${item.title}-${index}`}>
           <div className="riskCol"><span className="resultNumber">{String(index + 1).padStart(2, "0")}</span><div className="alertLabel"><span>{levelIcon(item.level)}</span>{levelLabel(item.level)}</div></div>
           <div className="easyCol"><h3><FinancialText text={item.title} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).title} firstOccurrenceOnly /></h3><ExplanationSections item={item} glossary={analysis.glossary} />{item.action && <div className="action"><b>이렇게 하세요</b><span><FinancialText text={item.action} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).action} firstOccurrenceOnly /></span></div>}</div>
           <blockquote><span>근거 원문{item.page ? ` · ${item.page}쪽` : ""}</span><p><ReadableOriginal text={item.original} /></p></blockquote>
         </article>)}</div>
-        <button className="allClausesButton" type="button" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>{showAll ? "전체 조항 접기" : `전체 ${analysis.items.length}개 조항 보기`}<span>{showAll ? "↑" : "↓"}</span></button>
-        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 조항</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).title} firstOccurrenceOnly /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “<ReadableOriginal text={item.original} />”</small></div></details>)}</div>}
+        <button className="allClausesButton" type="button" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>{showAll ? "전체 내용 접기" : `전체 내용 ${analysis.items.length}개 보기`}<span>{showAll ? "↑" : "↓"}</span></button>
+        {showAll && <div className="allClauses"><div className="allClausesHead"><h3>전체 내용</h3><p>처음 화면에서 숨긴 일반 내용까지 모두 확인할 수 있어요.</p></div>{analysis.items.map((item, index) => <details className={`clauseRow ${item.level}`} key={`all-${item.title}-${index}`}><summary><span className="clauseNumber">{String(index + 1).padStart(2, "0")}</span><span className="clauseLevel">{levelLabel(item.level)}</span><b><FinancialText text={item.title} glossary={analysis.glossary} highlightOnly={getClauseHighlightPlan(item, analysis.glossary).title} firstOccurrenceOnly /></b><i>＋</i></summary><div className="clauseBody"><ExplanationSections item={item} glossary={analysis.glossary} /><small>근거{item.page ? ` · ${item.page}쪽` : ""}: “<ReadableOriginal text={item.original} />”</small></div></details>)}</div>}
       </section>
 
       <section className="chatSection">
@@ -441,7 +446,7 @@ export default function Home() {
           {!messages.length && <div className="chatWelcome"><span>✦</span><div><b>아직 대화가 없어요</b><p>위에 질문을 적거나 예시 질문을 눌러보세요. 답은 계약서에 적힌 내용만 보고 알려드려요.</p></div></div>}
           {messages.map((message, index) => <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
             <div className="bubble">{message.role === "assistant" && <b>{message.notFound ? "문서에서 확인되지 않음" : "문서 기반 답변"}</b>}<p>{message.role === "assistant" ? <FinancialText text={message.text} glossary={message.glossary} /> : message.text}</p></div>
-            {message.citations?.map((citation, citationIndex) => <blockquote key={citationIndex}><span>근거 원문{citation.page ? ` · ${citation.page}쪽` : ""}</span><p>“<ReadableOriginal text={citation.original} />”</p><small>{citation.relevance}</small></blockquote>)}
+            {message.citations?.map((citation, citationIndex) => <blockquote key={citationIndex}><span>근거 원문{citation.page ? ` · ${citation.page}쪽` : ""}</span><p>“<ReadableOriginal text={citation.original} />”</p><small>{explanationWording(citation.relevance)}</small></blockquote>)}
           </div>)}
           {asking && <div className="message assistant"><div className="bubble typing"><i /><i /><i /></div></div>}
           {chatError && <p className="chatError">{chatError}</p>}

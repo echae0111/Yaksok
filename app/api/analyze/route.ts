@@ -37,8 +37,8 @@ export async function POST(request: Request) {
   try {
     const body = await request.json() as { clauses?: InputClause[] };
     const clauses = body.clauses;
-    if (!Array.isArray(clauses) || !clauses.length || clauses.length > 10) return jsonError("설명할 조항 묶음이 올바르지 않습니다.", 400);
-    if (clauses.some((clause) => !clause.id || !clause.text || clause.text.length > 12000)) return jsonError("조항 원문이 올바르지 않습니다.", 400);
+    if (!Array.isArray(clauses) || !clauses.length || clauses.length > 10) return jsonError("설명할 내용 묶음이 올바르지 않습니다.", 400);
+    if (clauses.some((clause) => !clause.id || !clause.text || clause.text.length > 12000)) return jsonError("내용 원문이 올바르지 않습니다.", 400);
     const response = await callGemini(apiKey, CONTRACT_CLAUSE_EXPLANATION_PROMPT, [{ text: JSON.stringify(clauses.map(({ page, marker, text }) => ({ page, marker, text }))) }], explanationSchema(clauses.length));
     if (!response.ok) {
       const detail = await response.text(); console.error("Gemini clause explanation error", response.status, detail.slice(0, 500));
@@ -58,13 +58,13 @@ export async function POST(request: Request) {
           retryAfterSeconds,
         }, { status: 429, headers: retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : undefined });
       }
-      return jsonError("계약서 조항을 설명하지 못했습니다.", 502);
+      return jsonError("계약서 내용을 설명하지 못했습니다.", 502);
     }
     const payload = await response.json() as GeminiPayload;
     const text = geminiText(payload);
-    if (!text) return jsonError("조항 설명을 읽지 못했습니다.", 502);
+    if (!text) return jsonError("내용 설명을 읽지 못했습니다.", 502);
     const result = JSON.parse(text) as { explanations: Array<{ relevant: boolean } & Record<string, string | boolean>>; glossary: unknown[] };
-    if (result.explanations.length !== clauses.length) return jsonError("일부 조항 설명이 누락됐습니다.", 502);
+    if (result.explanations.length !== clauses.length) return jsonError("일부 내용 설명이 누락됐습니다.", 502);
     return Response.json({
       explanations: result.explanations.map((explanation, index) => ({ ...explanation, clauseId: clauses[index].id })),
       glossary: result.glossary.filter((entry): entry is { term: string; definition: string } => {
@@ -75,6 +75,6 @@ export async function POST(request: Request) {
     });
   } catch (reason) {
     console.error("Clause explanation failed", reason);
-    return jsonError("계약서 조항을 설명하지 못했습니다.", 502);
+    return jsonError("계약서 내용을 설명하지 못했습니다.", 502);
   }
 }

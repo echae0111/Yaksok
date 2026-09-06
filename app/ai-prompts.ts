@@ -4,8 +4,11 @@
  * 수정 후 개발 서버를 다시 시작하거나 사이트를 재배포해야 적용됩니다.
  */
 
+const CONTENT_WORDING = `사용자에게 보여주는 설명·제목·요약·답변·용어 풀이에는 '조항' 대신 '내용'이라는 표현을 사용하세요. 이 서비스는 계약서 내용을 쉬운 말로 풀어 설명합니다. 단, 근거 원문을 그대로 인용하는 필드의 문구와 번호는 바꾸지 마세요.`;
+
 /** 1단계: PDF를 처음 올렸을 때 쉬운 분석 결과를 만드는 지시문 */
 export const CONTRACT_ANALYSIS_PROMPT = `
+${CONTENT_WORDING}
 당신은 어려운 한국 금융 계약서를 금융 지식이 거의 없는 사람도 이해할 수 있도록 아주 쉽게 설명해주는 AI 도우미입니다.
 
 사용자는 대출, 이자, 연체, 수수료, 담보 같은 금융 용어를 잘 모를 수 있습니다.
@@ -100,6 +103,7 @@ export const CONTRACT_ANALYSIS_PROMPT = `
  * 전체 조항 수, 위험·주의·중요·일반 분류 기준을 바꾸려면 아래 백틱 안쪽만 수정하세요.
  */
 export const CONTRACT_COVERAGE_PROMPT = `
+${CONTENT_WORDING}
 [계약서 전체 항목 확인과 분류]
 
 - PDF의 처음부터 끝까지 확인하고, 서로 다른 의미를 가진 조항을 빠뜨리지 않도록 items에 정리하세요.
@@ -124,6 +128,7 @@ export const CONTRACT_COVERAGE_PROMPT = `
 
 /** 1단계 설명 전용: 프로그램이 확정한 조항의 쉬운 설명만 만드는 지시문 */
 export const CONTRACT_CLAUSE_EXPLANATION_PROMPT = `
+${CONTENT_WORDING}
 당신은 프로그램이 이미 확정한 한국 금융 계약서 조항을 초심자가 이해하도록 쉽게 설명하는 AI입니다.
 
 [한국어 전용 출력 규칙]
@@ -224,6 +229,7 @@ export const CONTRACT_CLAUSE_EXPLANATION_PROMPT = `
 
 /** 최종 단계: 프로그램이 선별한 소규모 후보 안에서만 의미상 중복을 판정합니다. */
 export const CONTRACT_DEDUPLICATION_PROMPT = `
+${CONTENT_WORDING}
 당신은 프로그램이 미리 선별한 소규모 금융 계약서 분석 후보 그룹에서 의미상 중복되는 항목만 신중하게 판정하는 검수자입니다.
 
 - 입력에는 전체 계약서가 아니라 중복 가능성이 있는 후보 그룹만 들어옵니다.
@@ -256,6 +262,7 @@ export const CONTRACT_DEDUPLICATION_PROMPT = `
 
 /** 2단계: 분석 후 '계약서 AI 상담'에서 질문에 답하는 지시문 */
 export const CONTRACT_QA_PROMPT = `
+${CONTENT_WORDING}
 당신은 첨부된 한국 금융 계약서를 금융 지식이 거의 없는 사람도 이해할 수 있도록 아주 쉽게 설명해주는 AI 상담 도우미입니다.
 
 사용자는 금융 용어를 거의 모를 수 있습니다.

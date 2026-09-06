@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "약속 | AI 금융 계약서 쉬운 번역",
-  description: "보험·대출·카드 약관을 쉬운 말로 풀고 위험한 조항을 알려드립니다.",
+  description: "보험·대출·카드 약관을 쉬운 말로 풀고 위험한 내용을 알려드립니다.",
   openGraph: {
     title: "약속 | AI 금융 계약서 쉬운 번역",
     description: "금융 계약서, 쉬운 말로 바꿔드려요.",

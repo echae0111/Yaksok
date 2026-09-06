@@ -519,6 +519,6 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
     const sourceClauseId = `${marker}_${textHash.slice(0, 12).toUpperCase()}`;
     clauses.push({ id, page: block.page, pageEnd: block.endPage, order: clauses.length, marker, sourceArticle: block.sourceArticle, text: sourceText, original: sourceText, sourceBlockIds: block.sourceBlockIds, sourceClauseIds: [sourceClauseId], ...risk });
   }
-  if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
+  if (!clauses.length) throw new Error("계약서에서 설명할 내용을 찾지 못했어요.");
   return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };
 }
