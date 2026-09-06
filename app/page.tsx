@@ -1,8 +1,9 @@
 "use client";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { BasicInfo, DocumentNotice, RawClause } from "./contract-parser";
+import { clearLastDocument, documentHash, getCachedAnalysis, getSavedDocument, restoreLastDocument, saveDocument, saveMessages, setCachedAnalysis } from "./analysis-storage";
 
-type Status = "idle" | "analyzing" | "done" | "error";
+type Status = "restoring" | "idle" | "analyzing" | "done" | "error";
 type GlossaryTerm = { term: string; definition: string };
 type Item = { id: string; marker: string; sourceArticle: string | null; level: "danger" | "caution" | "important" | "general"; title: string; core: string; easyExplanation: string; impact: string; checkPoint: string; action: string; original: string; page: number | null; sourceBlockIds: string[]; sourceClauseIds: string[]; effects: RawClause["effects"] };
 type Analysis = { documentType: string; summary: string; items: Item[]; glossary: GlossaryTerm[]; basicInfo: BasicInfo[]; notices: DocumentNotice[] };
@@ -248,7 +249,9 @@ function hasUnsupportedInference(explanation: ClauseExplanation, original: strin
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<Status>("idle");
+  const [status, setStatus] = useState<Status>("restoring");
+  const activeHash = useRef<string | null>(null);
+  const [storageNotice, setStorageNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState("");
@@ -261,25 +264,61 @@ export default function Home() {
   const [progress, setProgress] = useState<AnalysisProgress>({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 });
 
   useEffect(() => {
+    let cancelled = false;
+    void restoreLastDocument<Analysis, Message>().then((saved) => {
+      if (cancelled) return;
+      if (!saved) { setStatus("idle"); return; }
+      activeHash.current = saved.hash;
+      setFile(new File([saved.file], saved.fileName, { type: "application/pdf", lastModified: saved.lastModified }));
+      setAnalysis(saved.analysis); setMessages(saved.messages); setStatus("done");
+      setStorageNotice("이 브라우저에 저장된 계약서와 분석 결과를 불러왔어요.");
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     if (status !== "analyzing") return;
     const timer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, [status]);
 
-  const reset = () => { setStatus("idle"); setFile(null); setAnalysis(null); setError(""); setMessages([]); setShowAll(false); setElapsedSeconds(0); setProgress({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 }); if (inputRef.current) inputRef.current.value = ""; };
+  const reset = async () => {
+    if (asking) return;
+    const cleared = await clearLastDocument();
+    activeHash.current = null;
+    setStorageNotice(cleared ? "" : "저장 상태를 변경하지 못했어요. 새로고침하면 이전 계약서가 다시 표시될 수 있어요.");
+    setStatus("idle"); setFile(null); setAnalysis(null); setError(""); setMessages([]); setQuestion(""); setChatError(""); setShowAll(false); setElapsedSeconds(0); setProgress({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 }); if (inputRef.current) inputRef.current.value = "";
+  };
+  const finishAnalysis = async (hash: string, selected: File, data: Analysis, previousMessages: Message[] = []) => {
+    activeHash.current = hash;
+    try {
+      const saved = await saveDocument<Analysis, Message>(hash, selected, data);
+      setAnalysis(saved.analysis); setMessages(saved.messages);
+      setStorageNotice("이 브라우저에 저장했어요. 새로고침하거나 같은 PDF를 다시 올려도 이 결과가 유지돼요.");
+    } catch {
+      setAnalysis(data); setMessages(previousMessages);
+      setStorageNotice("브라우저에 저장하지 못했어요. 현재 결과는 볼 수 있지만 새로고침 후에는 유지되지 않을 수 있어요.");
+    }
+    setStatus("done");
+    window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
+  };
   const analyze = async (selected?: File) => {
     if (!selected) return;
     if (selected.type !== "application/pdf" && !selected.name.toLowerCase().endsWith(".pdf")) { setError("PDF 파일만 분석할 수 있어요."); setStatus("error"); return; }
     if (selected.size > 10 * 1024 * 1024) { setError("파일은 10MB 이하로 올려 주세요."); setStatus("error"); return; }
-    setFile(selected); setError(""); setAnalysis(null); setMessages([]); setElapsedSeconds(0); setProgress({ phase: "PDF 내용을 읽고 있어요", completed: 0, total: 0, percent: 4 }); setStatus("analyzing");
+    activeHash.current = null;
+    setFile(selected); setError(""); setAnalysis(null); setMessages([]); setStorageNotice(""); setShowAll(false); setQuestion(""); setChatError(""); setElapsedSeconds(0); setProgress({ phase: "저장된 계약서를 확인하고 있어요", completed: 0, total: 0, percent: 4 }); setStatus("analyzing");
     try {
+      const hash = await documentHash(selected);
+      const savedDocument = await getSavedDocument<Analysis, Message>(hash);
+      if (savedDocument) { await finishAnalysis(hash, selected, savedDocument.analysis, savedDocument.messages); return; }
       // PDF 처리 코드는 파일을 선택한 뒤에만 불러와 첫 화면을 가볍게 유지합니다.
-      const { ANALYSIS_VERSION, getCachedAnalysis, parseContract, setCachedAnalysis } = await import("./contract-parser");
+      const { ANALYSIS_VERSION, parseContract } = await import("./contract-parser");
+      const cacheKey = `${hash}:${ANALYSIS_VERSION}`;
+      const cached = await getCachedAnalysis<Analysis>(cacheKey);
+      if (cached) { await finishAnalysis(hash, selected, cached); return; }
       const parsed = await parseContract(selected, (currentPage, totalPages) => setProgress({ phase: `PDF ${currentPage} / ${totalPages}쪽을 읽고 있어요`, completed: currentPage, total: totalPages, percent: 5 + Math.round((currentPage / totalPages) * 12) }), (currentPage, totalPages) => setProgress({ phase: `스캔된 페이지의 글자를 인식하고 있어요 (${currentPage} / ${totalPages}쪽)`, completed: currentPage, total: totalPages, percent: 14 + Math.round((currentPage / totalPages) * 4) }));
       setProgress({ phase: "조항을 나누고 저장된 결과를 확인하고 있어요", completed: 0, total: parsed.clauses.length, percent: 18 });
-      const cacheKey = `${parsed.documentHash}:${ANALYSIS_VERSION}`;
-      const cached = await getCachedAnalysis<Analysis>(cacheKey);
-      if (cached) { setAnalysis(cached); setStatus("done"); window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100); return; }
       const saved = await Promise.all(parsed.clauses.map(async (clause) => ({ clause, cached: await getCachedAnalysis<CachedClauseExplanation>(`${cacheKey}:clause:${clause.id}`) })));
       const explanationMap = new Map(saved.filter((entry) => entry.cached).map((entry) => [entry.clause.id, entry.cached!.explanation]));
       const glossaryParts = saved.flatMap((entry) => entry.cached?.glossary ?? []);
@@ -327,8 +366,7 @@ export default function Home() {
       const glossary = [...new Map(glossaryParts.filter((entry) => !excludedGlossaryTerms.has(entry.term.trim())).map((entry) => [entry.term, entry])).values()];
       const data: Analysis = { documentType, summary, items, glossary, basicInfo: parsed.basicInfo, notices: parsed.notices };
       await setCachedAnalysis(cacheKey, data);
-      setAnalysis(data); setStatus("done");
-      window.setTimeout(() => document.querySelector("#results")?.scrollIntoView({ behavior: "smooth" }), 100);
+      await finishAnalysis(hash, selected, data);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "문서를 분석하지 못했습니다."); setStatus("error"); }
   };
 
@@ -344,7 +382,12 @@ export default function Home() {
       const response = await fetch("/api/ask", { method: "POST", body });
       const data = await readApiJson<{ answer?: string; citations?: Citation[]; notFound?: boolean; glossary?: GlossaryTerm[] }>(response);
       if (!response.ok || !data.answer) throw new Error(data.error || "답변을 만들지 못했습니다.");
-      setMessages((current) => [...current, { role: "assistant", text: data.answer!, citations: data.citations, notFound: data.notFound, glossary: data.glossary }]);
+      const updated: Message[] = [...previous, userMessage, { role: "assistant", text: data.answer!, citations: data.citations, notFound: data.notFound, glossary: data.glossary }];
+      setMessages(updated);
+      if (activeHash.current) {
+        try { await saveMessages(activeHash.current, updated); }
+        catch { setStorageNotice("새 답변을 저장하지 못했어요. 새로고침하면 이번 답변이 사라질 수 있어요."); }
+      }
     } catch (reason) { setChatError(reason instanceof Error ? reason.message : "답변을 만들지 못했습니다."); }
     finally { setAsking(false); window.setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); }
   };
@@ -362,12 +405,14 @@ export default function Home() {
       <p className="lead">PDF를 분석하고, 궁금한 내용을 물어보고,<br className="mobileBreak" /> 놓치면 안 되는 날짜까지 챙겨보세요.</p>
       <div className={`upload ${status !== "idle" ? "active" : ""}`} onClick={() => status === "idle" && inputRef.current?.click()} onDragOver={(event) => { if (status === "idle") event.preventDefault(); }} onDrop={(event) => { if (status !== "idle") return; event.preventDefault(); analyze(event.dataTransfer.files[0]); }} role={status === "idle" ? "button" : undefined} tabIndex={status === "idle" ? 0 : -1} onKeyDown={(event) => event.key === "Enter" && status === "idle" && inputRef.current?.click()} aria-label={status === "idle" ? "PDF 파일 업로드" : undefined}>
         <input ref={inputRef} type="file" accept="application/pdf,.pdf" hidden onChange={(event) => analyze(event.target.files?.[0])} />
+        {status === "restoring" && <strong role="status">저장된 계약서를 불러오고 있어요…</strong>}
         {status === "idle" && <><div className="uploadIcon">↑</div><strong>계약서 PDF를 여기에 놓으세요</strong><span>또는 클릭해서 파일 선택 · 최대 10MB</span><button type="button">PDF 선택하기</button></>}
         {status === "analyzing" && <div className="loadingBlock"><div className="spinner" /><strong>{file?.name}</strong><span>{progress.phase}</span><div className="progressPanel" aria-live="polite"><div className="progressMeta"><b>{formatProgressCount(progress)}</b><time>{formatElapsed(elapsedSeconds)}</time></div><div className="progressTrack" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="계약서 분석 진행률"><i style={{ width: `${Math.min(progress.percent, 98)}%` }} /></div><div className="progressFoot"><span>{Math.min(progress.percent, 98)}%</span><small>긴 계약서는 몇 분 정도 걸릴 수 있어요. 창을 닫지 말아 주세요.</small></div></div><WaitingQuiz /></div>}
-        {status === "done" && <div className="fileDone"><span className="check">✓</span><div><strong>{file?.name}</strong><span>문서 분석이 완료되었습니다</span></div><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다른 파일</button></div>}
+        {status === "done" && <div className="fileDone"><span className="check">✓</span><div><strong>{file?.name}</strong><span>문서 분석이 완료되었습니다</span></div><button type="button" disabled={asking} onClick={(event) => { event.stopPropagation(); void reset(); }}>다른 파일</button></div>}
         {status === "error" && <div className="errorBlock"><span className="errorIcon">!</span><strong>분석하지 못했어요</strong><span>{error}</span><button type="button" onClick={(event) => { event.stopPropagation(); reset(); }}>다시 선택하기</button></div>}
       </div>
-      <div className="trust"><span>✓ 파일을 따로 저장하지 않음</span><span>✓ 회원가입 없이 이용</span></div>
+      <div className="trust"><span>✓ 계약서·결과는 이 브라우저에 저장</span><span>✓ 회원가입 없이 이용</span></div>
+      {storageNotice && <p role="status">{storageNotice}</p>}
     </section>
 
     {analysis && <>

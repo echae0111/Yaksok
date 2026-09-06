@@ -522,26 +522,3 @@ export async function parseContract(file: File, onPageProgress?: (currentPage: n
   if (!clauses.length) throw new Error("계약서에서 구분할 수 있는 조항을 찾지 못했어요.");
   return { documentHash, clauses, basicInfo: separated.basicInfo, notices: separated.notices };
 }
-
-const DB_NAME = "yaksok-analysis-cache";
-const STORE_NAME = "results";
-function openCache() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-export async function getCachedAnalysis<T>(key: string): Promise<T | null> {
-  try {
-    const db = await openCache();
-    return await new Promise<T | null>((resolve, reject) => { const request = db.transaction(STORE_NAME).objectStore(STORE_NAME).get(key); request.onsuccess = () => resolve((request.result as T) ?? null); request.onerror = () => reject(request.error); });
-  } catch { return null; }
-}
-export async function setCachedAnalysis<T>(key: string, value: T) {
-  try {
-    const db = await openCache();
-    await new Promise<void>((resolve, reject) => { const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(value, key); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
-  } catch { /* 분석 성공은 캐시 저장 실패보다 우선합니다. */ }
-}
